@@ -74,41 +74,37 @@ type PresenceData = {
 };
 
 // --- Constants ---
+// --- DEVELOPER PLAYLIST CONFIGURATION ---
+// Tambahkan atau ubah lagu di sini. Ini akan menjadi playlist default untuk semua ruangan.
+// Untuk lagu lokal: Letakkan di public/audio/ lalu ganti url menjadi "/audio/file.mp3"
 const PLAYLIST: Track[] = [
   { 
     title: "Midnight Chill", 
     artist: "DeepTalk Radio", 
-    duration: "3:47", 
-    totalSeconds: 227,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" 
+    duration: "6:12", 
+    totalSeconds: 372,
+    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
   },
   { 
     title: "Lofi Dreams", 
     artist: "Aesthetic Room", 
-    duration: "4:12", 
-    totalSeconds: 252,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
+    duration: "7:05", 
+    totalSeconds: 425,
+    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" 
   },
   { 
     title: "Quiet Night", 
     artist: "Silent Duo", 
-    duration: "4:05", 
-    totalSeconds: 245,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" 
+    duration: "5:20", 
+    totalSeconds: 320,
+    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" 
   },
   { 
     title: "Starlight", 
     artist: "Celestial", 
-    duration: "3:58", 
-    totalSeconds: 238,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" 
-  },
-  { 
-    title: "Deep Focus", 
-    artist: "Intimate Vibes", 
-    duration: "4:33", 
-    totalSeconds: 273,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3" 
+    duration: "4:45", 
+    totalSeconds: 285,
+    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" 
   },
 ];
 
@@ -147,6 +143,8 @@ export default function App() {
   const [partnerPresence, setPartnerPresence] = useState<PresenceData | null>(null);
   const [timeLeft, setTimeLeft] = useState(SESSION_DURATION);
   
+  const [roomHostId, setRoomHostId] = useState<string | null>(null);
+  
   // Music State
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -159,6 +157,60 @@ export default function App() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const introAudioRef = useRef<HTMLAudioElement | null>(null);
+  const outroAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Radio Effect Listener
+  useEffect(() => {
+    if (appState !== 'chat' || !roomCode) return;
+
+    const unsub = onSnapshot(doc(db, `rooms/${roomCode}/music/effects`), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const effect = data.activeEffect;
+        const triggerId = data.triggerId;
+        
+        // Use a local ref to track if we already played this trigger
+        if ((window as any)._lastTriggerId === triggerId) return;
+        (window as any)._lastTriggerId = triggerId;
+
+        const musicAudio = audioRef.current;
+        let effectAudio = null;
+
+        if (effect === 'opening') effectAudio = introAudioRef.current;
+        if (effect === 'closing') effectAudio = outroAudioRef.current;
+
+        if (effectAudio) {
+          if (musicAudio) musicAudio.volume = 0.2;
+          effectAudio.currentTime = 0;
+          effectAudio.play().catch(e => console.log("Effect blocked:", e));
+          effectAudio.onended = () => {
+            if (musicAudio) musicAudio.volume = 1.0;
+          };
+        }
+      }
+    });
+
+    return unsub;
+  }, [appState, roomCode]);
+
+  // Music Simulation
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    const interval = setInterval(() => {
+      setMusicProgress((prev) => {
+        const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
+        const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
+        if (prev >= currentTrack.totalSeconds) {
+          return currentTrack.totalSeconds; 
+        }
+        return prev + 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, currentTrackIndex]);
 
   // Audio Player Sync
   useEffect(() => {
@@ -167,7 +219,8 @@ export default function App() {
     }
 
     const audio = audioRef.current;
-    const currentTrack = PLAYLIST[currentTrackIndex];
+    const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
+    const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
 
     if (audio.src !== currentTrack.audioUrl) {
       audio.src = currentTrack.audioUrl;
@@ -175,7 +228,6 @@ export default function App() {
     }
 
     if (isPlaying) {
-      // Sync progress if more than 2s apart
       if (Math.abs(audio.currentTime - musicProgress) > 2) {
         audio.currentTime = musicProgress;
       }
@@ -293,6 +345,7 @@ export default function App() {
     const roomSnap = onSnapshot(doc(db, `rooms/${roomCode}`), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
+        setRoomHostId(data.hostId);
         const expiresAt = (data.expiresAt as Timestamp).toDate();
         const now = new Date();
         const diff = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000));
@@ -325,23 +378,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [appState]);
 
-  // Music Simulation (Local interpolation)
-  useEffect(() => {
-    if (!isPlaying) return;
-
-    const interval = setInterval(() => {
-      setMusicProgress((prev) => {
-        const currentTrack = PLAYLIST[currentTrackIndex];
-        if (prev >= currentTrack.totalSeconds) {
-          return currentTrack.totalSeconds; // Wait for server to advance
-        }
-        return prev + 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, currentTrackIndex]);
-
   // Scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
@@ -373,6 +409,7 @@ export default function App() {
       if (!snap.exists()) {
         // Create Room
         await setDoc(roomRef, {
+          hostId: auth.currentUser?.uid,
           createdAt: serverTimestamp(),
           expiresAt: Timestamp.fromDate(new Date(Date.now() + SESSION_DURATION * 1000))
         });
@@ -383,6 +420,12 @@ export default function App() {
           isPlaying: false,
           progress: 0,
           updatedAt: serverTimestamp()
+        });
+
+        // Create effects trigger doc
+        await setDoc(doc(db, `rooms/${roomCode}/music/effects`), {
+          activeEffect: null,
+          triggerId: null
         });
 
         addSystemMessage("Ruangan dibuat ✨");
@@ -467,6 +510,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen font-sans bg-surface-page overflow-hidden">
+      <audio ref={audioRef} />
+      <audio ref={introAudioRef} src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3" />
+      <audio ref={outroAudioRef} src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3" />
       <AnimatePresence mode="wait">
         {appState === 'join' ? (
           <JoinScreen 
@@ -612,6 +658,7 @@ export default function App() {
                   volume={volume}
                   setVolume={setVolume}
                   roomCode={roomCode}
+                  isHost={auth.currentUser?.uid === roomHostId}
                 />
               )}
             </AnimatePresence>
@@ -772,89 +819,75 @@ function MusicPanel({
   progress, 
   volume, 
   setVolume,
-  roomCode
+  roomCode,
+  isHost
 }: any) {
   const [playlist, setPlaylist] = useState<Track[]>(PLAYLIST);
-  const [spotifyUrl, setSpotifyUrl] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
+  const [isEffectPlaying, setIsEffectPlaying] = useState(false);
 
-  // Sync with Firestore Playlist if it exists
+  // Sync with Firestore Playlist
   useEffect(() => {
     const unsub = onSnapshot(doc(db, `rooms/${roomCode}/music/playlist`), (snap) => {
       if (snap.exists()) {
-        setPlaylist(snap.data().tracks);
+        const tracks = snap.data().tracks;
+        setPlaylist(tracks);
+        (window as any)._activePlaylist = tracks;
       } else {
         setPlaylist(PLAYLIST);
+        (window as any)._activePlaylist = PLAYLIST;
       }
     });
     return unsub;
   }, [roomCode]);
 
-  const handleImportSpotify = async () => {
-    if (!spotifyUrl.includes('playlist/')) {
-      alert("Masukkan link Spotify Playlist yang valid!");
-      return;
-    }
-    
-    setIsImporting(true);
+  const handleReorder = async (fromIndex: number, direction: 'up' | 'down') => {
+    if (!isHost) return;
+    const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1;
+    if (toIndex < 0 || toIndex >= playlist.length) return;
+
+    const newPlaylist = [...playlist];
+    const [movedItem] = newPlaylist.splice(fromIndex, 1);
+    newPlaylist.splice(toIndex, 0, movedItem);
+
     try {
-      const urlParts = spotifyUrl.split('playlist/');
-      if (urlParts.length < 2) throw new Error("INVALID_URL");
-      
-      const playlistId = urlParts[1].split('?')[0];
-      
-      // Get token from our server
-      const tokenRes = await axios.get('/api/spotify/token').catch(err => {
-        if (err.response?.data?.error === "Spotify credentials not configured") {
-          throw new Error("CONFIG_MISSING");
-        }
-        throw err;
+      await setDoc(doc(db, `rooms/${roomCode}/music/playlist`), {
+        tracks: newPlaylist,
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid
       });
-      const token = tokenRes.data.access_token;
-
-      // Get playlist tracks
-      const res = await axios.get(`/api/spotify/playlist/${playlistId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      const spotifyTracks: Track[] = res.data.tracks.items
-        .filter((item: any) => item.track) // Ensure track exists
-        .map((item: any) => ({
-          title: item.track.name,
-          artist: item.track.artists[0].name,
-          duration: `${Math.floor(item.track.duration_ms / 60000)}:${Math.floor((item.track.duration_ms % 60000) / 1000).toString().padStart(2, '0')}`,
-          totalSeconds: Math.floor(item.track.duration_ms / 1000),
-          audioUrl: item.track.preview_url || undefined,
-          spotifyId: item.track.id
-        }));
-
-      if (spotifyTracks.length > 0) {
-        await setDoc(doc(db, `rooms/${roomCode}/music/playlist`), {
-          tracks: spotifyTracks,
-          importedAt: serverTimestamp()
+      
+      // If we moved the currently playing track, update the index
+      if (fromIndex === currentTrackIndex) {
+        await updateDoc(doc(db, `rooms/${roomCode}/music/current`), {
+          currentTrackIndex: toIndex,
+          updatedAt: serverTimestamp()
         });
-        setSpotifyUrl('');
-        alert(`Berhasil mengimpor ${spotifyTracks.length} lagu! ✨`);
-      } else {
-        alert("Playlist kosong atau tidak bisa diakses.");
+      } else if (toIndex === currentTrackIndex) {
+        // If something was moved into the current track's position
+        await updateDoc(doc(db, `rooms/${roomCode}/music/current`), {
+          currentTrackIndex: fromIndex,
+          updatedAt: serverTimestamp()
+        });
       }
-    } catch (err: any) {
-      console.error("Spotify import error:", err);
-      const serverError = err.response?.data?.error;
-      
-      if (err.message === "CONFIG_MISSING") {
-        alert("Integrasi Spotify belum siap. Developer harus mengisi SPOTIFY_CLIENT_ID & SECRET di panel Secrets.");
-      } else if (err.message === "INVALID_URL") {
-        alert("Link playlist tidak valid.");
-      } else if (serverError === "Not found.") {
-        alert("Playlist tidak ditemukan. Pastikan sudah diset ke 'Public' di Spotify.");
-      } else if (err.message?.includes("Database") || err.message?.includes("(default)")) {
-        alert("Firestore Database Error: Pastikan konfigurasi 'firestoreDatabaseId' sudah benar di firebase-applet-config.json. Coba refresh atau deploy ulang.");
-      } else {
-        alert(`Gagal: ${serverError || "Terjadi kesalahan koneksi"}`);
-      }
-    } finally {
-      setIsImporting(false);
+    } catch (err) {
+      console.error("Reorder failed:", err);
+    }
+  };
+
+  const handleTriggerEffect = async (type: 'opening' | 'closing') => {
+    if (!isHost || isEffectPlaying) return;
+    
+    setIsEffectPlaying(true);
+    try {
+      await setDoc(doc(db, `rooms/${roomCode}/music/effects`), {
+        activeEffect: type,
+        triggerId: Date.now().toString()
+      });
+      // Small cooldown
+      setTimeout(() => setIsEffectPlaying(false), 3000);
+    } catch (err) {
+      console.error("Effect trigger failed:", err);
+      setIsEffectPlaying(false);
     }
   };
 
@@ -877,9 +910,12 @@ function MusicPanel({
       <div className="p-6 flex flex-col h-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="font-headline font-extrabold text-xl text-snow tracking-wide flex items-center gap-2">
-            RADIO MALAM 🌙
-          </h2>
+          <div className="flex flex-col">
+            <h2 className="font-headline font-extrabold text-xl text-snow tracking-wide flex items-center gap-2">
+              RADIO MALAM 🌙
+            </h2>
+            <span className="text-[10px] text-fog font-medium uppercase tracking-[0.2em] mt-1">Sesuaikan Urutan Playlist</span>
+          </div>
           <button 
             onClick={onClose}
             className="p-2 text-fog hover:text-snow cursor-pointer"
@@ -888,28 +924,35 @@ function MusicPanel({
           </button>
         </div>
 
-        {/* Spotify Import */}
-        <div className="mb-6 flex gap-2">
-          <input 
-            type="text" 
-            value={spotifyUrl}
-            onChange={(e) => setSpotifyUrl(e.target.value)}
-            placeholder="Kirim link Spotify Playlist ke sini..."
-            className="flex-1 bg-dark-charcoal text-fog text-xs p-3 rounded-xl focus:outline-none focus:ring-1 focus:ring-blurple/50"
-          />
-          <button 
-            onClick={handleImportSpotify}
-            disabled={isImporting || !spotifyUrl}
-            className="bg-blurple disabled:opacity-50 text-snow text-xs font-bold px-4 rounded-xl cursor-pointer"
-          >
-            {isImporting ? "..." : "Import"}
-          </button>
-        </div>
-
         {/* Now Playing Section */}
         <div className="bg-dark-charcoal p-6 rounded-2xl mb-6">
+          {/* Announcer Controls */}
+          {isHost && (
+            <div className="flex items-center gap-2 mb-6 border-b border-dim-grey/30 pb-4">
+              <div className="flex-1">
+                <p className="text-[10px] font-bold text-blurple uppercase tracking-widest mb-2">Panel Penyiar 🎙️</p>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => handleTriggerEffect('opening')}
+                    disabled={isEffectPlaying}
+                    className="flex-1 bg-blurple/10 hover:bg-blurple/20 text-blurple text-[10px] font-bold py-2 px-3 rounded-lg border border-blurple/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Radio className="w-3 h-3" /> OPENING
+                  </button>
+                  <button 
+                    onClick={() => handleTriggerEffect('closing')}
+                    disabled={isEffectPlaying}
+                    className="flex-1 bg-spring-green/10 hover:bg-spring-green/20 text-spring-green text-[10px] font-bold py-2 px-3 rounded-lg border border-spring-green/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Radio className="w-3 h-3" /> CLOSING
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-2">
-            <div className="pr-4 overflow-hidden">
+            <div className="pr-4 overflow-hidden text-left">
               <h3 className="text-snow font-medium text-lg truncate">{currentTrack.title}</h3>
               <p className="text-fog text-sm truncate">{currentTrack.artist}</p>
             </div>
@@ -927,12 +970,6 @@ function MusicPanel({
               ))}
             </div>
           </div>
-
-          {!currentTrack.audioUrl && (
-            <div className="text-[10px] text-blurple font-medium mb-2 px-1">
-              Preview Spotify tidak tersedia. Hanya sinkron metadata.
-            </div>
-          )}
 
           <div className="space-y-4 pt-4">
             <div className="relative h-1 bg-dim-grey rounded-full overflow-hidden">
@@ -953,7 +990,7 @@ function MusicPanel({
               onClick={() => onTrackChange((currentTrackIndex - 1 + playlist.length) % playlist.length)}
               className="p-2 text-snow hover:text-blurple transition-colors cursor-pointer"
             >
-              <SkipBack className="w-8 h-8 fill-current" />
+              <SkipBack className="w-8 h-8" />
             </button>
             <button 
               onClick={onTogglePlay}
@@ -965,13 +1002,13 @@ function MusicPanel({
               onClick={() => onTrackChange((currentTrackIndex + 1) % playlist.length)}
               className="p-2 text-snow hover:text-blurple transition-colors cursor-pointer"
             >
-              <SkipForward className="w-8 h-8 fill-current" />
+              <SkipForward className="w-8 h-8" />
             </button>
           </div>
 
           {/* Volume */}
           <div className="flex items-center gap-4 mt-8 px-4">
-            <Volume2 className="w-5 h-5 text-fog" />
+            <Volume2 className="w-5 h-5 text-fog " />
             <input 
               type="range"
               min="0"
@@ -985,30 +1022,51 @@ function MusicPanel({
 
         {/* Playlist */}
         <div className="flex-1 overflow-y-auto scrollbar-hide">
-          <h4 className="text-[10px] font-bold text-fog uppercase tracking-widest mb-4 px-2">Playlist Sekarang</h4>
+          <h4 className="text-[10px] font-bold text-fog uppercase tracking-widest mb-4 px-2">Antrian Lagu</h4>
           <div className="space-y-1 pb-10">
             {playlist.map((track, index) => (
               <div 
                 key={index}
-                onClick={() => onTrackChange(index)}
-                className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors group ${
+                className={`flex items-center justify-between p-3 rounded-xl transition-colors group ${
                   index === currentTrackIndex 
                     ? 'bg-blurple/10 border-l-[3px] border-blurple' 
                     : 'hover:bg-dark-charcoal active:bg-dark-charcoal/80'
                 }`}
               >
-                <div className="flex items-center gap-4 overflow-hidden">
+                <div 
+                  className="flex items-center gap-4 overflow-hidden flex-1 cursor-pointer"
+                  onClick={() => onTrackChange(index)}
+                >
                   <span className={`text-xs font-mono w-4 shrink-0 ${index === currentTrackIndex ? 'text-blurple' : 'text-fog group-hover:text-snow'}`}>
                     {index + 1}
                   </span>
-                  <div className="overflow-hidden">
+                  <div className="overflow-hidden text-left">
                     <p className={`text-sm font-medium truncate ${index === currentTrackIndex ? 'text-snow' : 'text-snow/80 group-hover:text-snow'}`}>
                       {track.title}
                     </p>
                     <p className="text-xs text-fog truncate">{track.artist}</p>
                   </div>
                 </div>
-                <span className="text-xs text-fog font-mono shrink-0 ml-2">{track.duration}</span>
+
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  <div className="flex flex-col gap-0.5">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleReorder(index, 'up'); }}
+                      disabled={index === 0}
+                      className="p-1 text-fog hover:text-snow disabled:opacity-0 transition-opacity cursor-pointer"
+                    >
+                      <ChevronDown className="w-4 h-4 rotate-180" />
+                    </button>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleReorder(index, 'down'); }}
+                      disabled={index === playlist.length - 1}
+                      className="p-1 text-fog hover:text-snow disabled:opacity-0 transition-opacity cursor-pointer"
+                    >
+                      <ChevronDown className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <span className="text-xs text-fog font-mono ml-1">{track.duration}</span>
+                </div>
               </div>
             ))}
           </div>
