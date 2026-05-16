@@ -27,7 +27,17 @@ import firebaseConfig from '../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
-export const db = getFirestore(app);
+
+// Database ID is required for custom provisioned databases in AI Studio
+const databaseId = (firebaseConfig as any).firestoreDatabaseId;
+if (!databaseId) {
+  console.warn('firestoreDatabaseId not found in config. Keys present:', Object.keys(firebaseConfig));
+  console.warn('Falling back to (default)');
+} else {
+  console.log('Initializing Firestore with databaseId:', databaseId);
+}
+
+export const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
 
 /**
  * Operation types for Firestore error reporting.
