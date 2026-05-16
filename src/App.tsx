@@ -389,7 +389,13 @@ export default function App() {
       }
       
       setAppState('chat');
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Room Join Error:", err);
+      if (err.message && err.message.includes('Database')) {
+        alert("Gagal terhubung ke Database. Pastikan konfigurasi Database ID sudah benar.");
+      } else {
+        alert("Gagal masuk ke ruangan. Periksa koneksi internet atau ID Ruangan.");
+      }
       handleFirestoreError(err, OperationType.GET, `rooms/${roomCode}`);
     }
   };
