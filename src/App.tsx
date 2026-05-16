@@ -75,36 +75,36 @@ type PresenceData = {
 
 // --- Constants ---
 // --- DEVELOPER PLAYLIST CONFIGURATION ---
-// Tambahkan atau ubah lagu di sini. Ini akan menjadi playlist default untuk semua ruangan.
-// Untuk lagu lokal: Letakkan di public/audio/ lalu ganti url menjadi "/audio/file.mp3"
+// Letakkan file mp3 Anda di folder: public/audio/
+// Contoh: public/audio/track1.mp3 -> audioUrl: "/audio/track1.mp3"
 const PLAYLIST: Track[] = [
   { 
     title: "Midnight Chill", 
     artist: "DeepTalk Radio", 
-    duration: "6:12", 
-    totalSeconds: 372,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/track1.mp3" 
   },
   { 
     title: "Lofi Dreams", 
     artist: "Aesthetic Room", 
-    duration: "7:05", 
-    totalSeconds: 425,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/track2.mp3" 
   },
   { 
     title: "Quiet Night", 
     artist: "Silent Duo", 
-    duration: "5:20", 
-    totalSeconds: 320,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/track3.mp3" 
   },
   { 
     title: "Starlight", 
     artist: "Celestial", 
-    duration: "4:45", 
-    totalSeconds: 285,
-    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/track4.mp3" 
   },
 ];
 
@@ -495,7 +495,7 @@ export default function App() {
             SESI TELAH BERAKHIR
           </h1>
           <p className="text-fog text-lg mb-8">
-            Semua pesan telah dihapus. T jejak yang tertinggal. 🌙
+            Semua pesan telah dihapus. Tidak ada jejak yang tertinggal. 🌙
           </p>
           <button 
             onClick={() => window.location.reload()}
@@ -511,8 +511,8 @@ export default function App() {
   return (
     <div className="min-h-screen font-sans bg-surface-page overflow-hidden">
       <audio ref={audioRef} />
-    <audio ref={introAudioRef} src="/audio/opening.mp3" />
-    <audio ref={outroAudioRef} src="/audio/closing.mp3" />
+      <audio ref={introAudioRef} src="/audio/opening.mp3" />
+      <audio ref={outroAudioRef} src="/audio/closing.mp3" />
       <AnimatePresence mode="wait">
         {appState === 'join' ? (
           <JoinScreen 
@@ -763,7 +763,7 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: an
                     onClick={() => setNickname(auth.currentUser?.displayName?.split(' ')[0] || '')}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] bg-blurple/20 text-blurple font-bold px-2 py-1 rounded-md hover:bg-blurple/30 cursor-pointer"
                   >
-                    Gunakan Nama Go
+                    Gunakan Nama Google
                   </button>
                 )}
               </div>
