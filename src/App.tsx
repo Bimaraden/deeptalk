@@ -511,8 +511,8 @@ export default function App() {
   return (
     <div className="min-h-screen font-sans bg-surface-page overflow-hidden">
       <audio ref={audioRef} />
-      <audio ref={introAudioRef} src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3" />
-      <audio ref={outroAudioRef} src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3" />
+    <audio ref={introAudioRef} src="/audio/opening.mp3" />
+    <audio ref={outroAudioRef} src="/audio/closing.mp3" />
       <AnimatePresence mode="wait">
         {appState === 'join' ? (
           <JoinScreen 
