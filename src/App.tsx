@@ -276,49 +276,58 @@ export default function App() {
     };
   }, [currentTrackIndex, user?.uid, roomHostId, roomCode]);
 
-  // Handle source changes and playback state
+  // Handle source changes
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
     const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
-    
-    // Use a more robust URL comparison
     const targetSrc = new URL(currentTrack.audioUrl, window.location.origin).href;
-    const currentSrc = audio.src;
 
-    if (currentSrc !== targetSrc) {
-      console.log("Changing source to:", targetSrc);
+    if (audio.src !== targetSrc) {
+      console.log("Loading new source:", targetSrc);
       audio.src = currentTrack.audioUrl;
       audio.load();
       
-      // When the new track is ready, we set the initial progress
       const handleCanPlay = () => {
         if (isPlaying) {
           audio.currentTime = musicProgress;
-          audio.play().catch(e => console.warn("Playback failed on canplay:", e));
+          audio.play().catch(e => console.warn("Initial playback failed:", e));
         }
         audio.removeEventListener('canplay', handleCanPlay);
       };
       audio.addEventListener('canplay', handleCanPlay);
+    }
+  }, [currentTrackIndex]);
+
+  // Handle play/pause state
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !audio.src) return;
+
+    if (isPlaying) {
+      if (audio.paused) {
+        audio.play().catch(e => console.warn("Resume failed:", e));
+      }
     } else {
-      // If the source is the same, just sync play/pause
-      if (isPlaying) {
-        if (audio.paused) {
-          audio.play().catch(e => console.warn("Playback failed:", e));
-        }
-        // Sync progress if drift is too large
-        if (Math.abs(audio.currentTime - musicProgress) > 3) {
-          audio.currentTime = musicProgress;
-        }
-      } else {
-        if (!audio.paused) {
-          audio.pause();
-        }
+      if (!audio.paused) {
+        audio.pause();
       }
     }
-  }, [currentTrackIndex, isPlaying, musicProgress]);
+  }, [isPlaying]);
+
+  // Handle significant progress jumps (sync from remote)
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !audio.src || !isPlaying) return;
+
+    const diff = Math.abs(audio.currentTime - musicProgress);
+    if (diff > 4) {
+      console.log("Significant drift detected, syncing time:", diff);
+      audio.currentTime = musicProgress;
+    }
+  }, [musicProgress, isPlaying]);
 
   // Occasional Firestore sync for host
   useEffect(() => {
@@ -432,17 +441,30 @@ export default function App() {
     });
 
     // 3. Music Listener
+    let lastKnownIndex = -1;
     const musicUnsub = onSnapshot(doc(db, `rooms/${roomCode}/music/current`), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        setCurrentTrackIndex(data.currentTrackIndex);
-        setIsPlaying(data.isPlaying);
         
-        // Only sync progress if it's a significant jump (to avoid fight between clients)
-        const remoteProgress = data.progress;
-        if (Math.abs(remoteProgress - musicProgress) > 5) {
-          setMusicProgress(remoteProgress);
+        const newIndex = data.currentTrackIndex;
+        const newIsPlaying = data.isPlaying;
+        const newProgress = data.progress;
+
+        if (newIndex !== lastKnownIndex) {
+          lastKnownIndex = newIndex;
+          setCurrentTrackIndex(newIndex);
+          setMusicProgress(newProgress);
+        } else {
+          // Significant jump logic
+          setMusicProgress(prev => {
+            if (Math.abs(newProgress - prev) > 8) {
+              return newProgress;
+            }
+            return prev;
+          });
         }
+        
+        setIsPlaying(newIsPlaying);
       }
     });
 
@@ -579,13 +601,20 @@ export default function App() {
   };
 
   const syncMusic = async (updates: any) => {
+    // Optimistic local update
+    if (updates.isPlaying !== undefined) setIsPlaying(updates.isPlaying);
+    if (updates.currentTrackIndex !== undefined) setCurrentTrackIndex(updates.currentTrackIndex);
+    if (updates.progress !== undefined) setMusicProgress(updates.progress);
+
     try {
+      console.log("Syncing music updates:", updates);
       await updateDoc(doc(db, `rooms/${roomCode}/music/current`), {
         ...updates,
         updatedAt: serverTimestamp()
       });
     } catch (err) {
       console.error("Music sync failed:", err);
+      // Revert if failed? (Optional, but good for UX)
     }
   };
 
@@ -818,9 +847,25 @@ export default function App() {
                 <MusicPanel 
                   onClose={() => setIsMusicPanelOpen(false)}
                   currentTrackIndex={currentTrackIndex}
-                  onTrackChange={(idx: number) => syncMusic({ currentTrackIndex: idx, progress: 0 })}
+                  onTrackChange={(idx: number) => {
+                    if (audioRef.current) {
+                      audioRef.current.currentTime = 0;
+                      if (isPlaying) audioRef.current.play().catch(() => {});
+                    }
+                    syncMusic({ currentTrackIndex: idx, progress: 0 });
+                  }}
                   isPlaying={isPlaying}
-                  onTogglePlay={() => syncMusic({ isPlaying: !isPlaying, progress: musicProgress })}
+                  onTogglePlay={() => {
+                    const nextPlaying = !isPlaying;
+                    if (audioRef.current) {
+                      if (nextPlaying) {
+                        audioRef.current.play().catch(e => console.warn("Direct play failed:", e));
+                      } else {
+                        audioRef.current.pause();
+                      }
+                    }
+                    syncMusic({ isPlaying: nextPlaying, progress: musicProgress });
+                  }}
                   progress={musicProgress}
                   volume={volume}
                   setVolume={setVolume}
