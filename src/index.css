@@ -5,6 +5,14 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-headline: "Nunito", sans-serif;
 
+  /* Neobrutalist Palette */
+  --color-neo-yellow: #FEFF00;
+  --color-neo-pink: #FF00F5;
+  --color-neo-cyan: #00F0FF;
+  --color-neo-green: #00FF00;
+  --color-neo-black: #000000;
+  --color-neo-white: #FFFFFF;
+  
   --color-blurple: #5865f2;
   --color-dark-blurple: #3442d9;
   --color-spring-green: #57f287;
@@ -13,12 +21,17 @@
   --color-not-quite-black: #23272a;
   --color-dark-charcoal: #2c2f33;
   --color-dim-grey: #50555f;
-  --color-surface-page: #0e0f2d;
+  --color-surface-page: #FEFF00; /* Yellow background for neobrutalism */
+
+  /* Hard Shadows */
+  --shadow-neo: 4px 4px 0px 0px rgba(0, 0, 0, 1);
+  --shadow-neo-lg: 8px 8px 0px 0px rgba(0, 0, 0, 1);
+  --shadow-neo-sm: 2px 2px 0px 0px rgba(0, 0, 0, 1);
 }
 
 @layer base {
   body {
-    @apply bg-surface-page text-snow font-sans antialiased selection:bg-blurple/30;
+    @apply bg-neo-yellow text-neo-black font-sans antialiased selection:bg-neo-cyan;
   }
 }
 
