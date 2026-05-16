@@ -80,7 +80,7 @@ const PLAYLIST: Track[] = [
     artist: "DeepTalk Radio", 
     duration: "3:47", 
     totalSeconds: 227,
-    audioUrl: "https://cdn.pixabay.com/audio/2022/05/27/audio_1808f3030e.mp3" 
+    audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" 
   },
   { 
     title: "Lofi Dreams", 
@@ -848,6 +848,8 @@ function MusicPanel({
         alert("Link playlist tidak valid.");
       } else if (serverError === "Not found.") {
         alert("Playlist tidak ditemukan. Pastikan sudah diset ke 'Public' di Spotify.");
+      } else if (err.message?.includes("Database") || err.message?.includes("(default)")) {
+        alert("Firestore Database Error: Pastikan konfigurasi 'firestoreDatabaseId' sudah benar di firebase-applet-config.json. Coba refresh atau deploy ulang.");
       } else {
         alert(`Gagal: ${serverError || "Terjadi kesalahan koneksi"}`);
       }
