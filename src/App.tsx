@@ -19,7 +19,8 @@ import {
   Info,
   ShieldCheck,
   X,
-  Radio
+  Radio,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -79,32 +80,74 @@ type PresenceData = {
 // Contoh: public/audio/track1.mp3 -> audioUrl: "/audio/track1.mp3"
 const PLAYLIST: Track[] = [
   { 
-    title: "Midnight Chill", 
-    artist: "DeepTalk Radio", 
+    title: "Bayangkan", 
+    artist: "Hindia", 
     duration: "4:00", 
     totalSeconds: 240,
-    audioUrl: "/audio/track1.mp3" 
+    audioUrl: "/audio/Bayangkan_spotdown.org.mp3" 
   },
   { 
-    title: "Lofi Dreams", 
-    artist: "Aesthetic Room", 
+    title: "Firasat", 
+    artist: "Marcell", 
     duration: "4:00", 
     totalSeconds: 240,
-    audioUrl: "/audio/track2.mp3" 
+    audioUrl: "/audio/Firasat_spotdown.org.mp3" 
   },
   { 
-    title: "Quiet Night", 
-    artist: "Silent Duo", 
+    title: "Untitled", 
+    artist: "Maliq & D'Essentials", 
     duration: "4:00", 
     totalSeconds: 240,
-    audioUrl: "/audio/track3.mp3" 
+    audioUrl: "/audio/Untitled_spotdown.org.mp3" 
   },
   { 
-    title: "Starlight", 
-    artist: "Celestial", 
+    title: "Rayuan Perempuan Gila", 
+    artist: "Nadin Amizah", 
     duration: "4:00", 
     totalSeconds: 240,
-    audioUrl: "/audio/track4.mp3" 
+    audioUrl: "/audio/Rayuan Perempuan Gila_spotdown.org.mp3" 
+  },
+  { 
+    title: "Senja Teduh Pelita", 
+    artist: "Maliq & D'Essentials", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Senja Teduh Pelita_spotdown.org.mp3" 
+  },
+  { 
+    title: "Laskar Pelangi", 
+    artist: "Nidji", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Laskar Pelangi_spotdown.org.mp3" 
+  },
+  { 
+    title: "Sempurna", 
+    artist: "Andra & The Backbone", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Sempurna_spotdown.org.mp3" 
+  },
+  { 
+    title: "Kau Masih Kekasihku", 
+    artist: "NaFF", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Kau Masih Kekasihku_spotdown.org.mp3" 
+  },
+  { 
+    title: "Kita Ke Sana", 
+    artist: "Hindia", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Kita Ke Sana_spotdown.org.mp3" 
+  },
+  { 
+    title: "Tarot", 
+    artist: ".Feast", 
+    duration: "4:00", 
+    totalSeconds: 240,
+    audioUrl: "/audio/Tarot_spotdown.org.mp3" 
   },
 ];
 
@@ -136,6 +179,8 @@ const getTimestamp = () => {
 // --- Main App ---
 export default function App() {
   const [appState, setAppState] = useState<'join' | 'chat' | 'end'>('join');
+  const [user, setUser] = useState<any>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [nickname, setNickname] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -244,23 +289,32 @@ export default function App() {
     }
   }, [volume]);
 
-  // Initialize Auth
+  // Initialize Auth & Listen for state changes
   useEffect(() => {
-    initAuth().catch(err => {
-      console.warn("Auto-login failed, manual login may be required.");
+    const unsub = auth.onAuthStateChanged((u) => {
+      setUser(u);
+      if (u) setAuthError(null);
     });
+
+    initAuth().catch(err => {
+      console.warn("Auto-login failed:", err);
+      // We don't set authError here to avoid scaring the user, 
+      // but we log it if Google login fails later.
+    });
+
+    return unsub;
   }, []);
 
   // Presence Tracking
   useEffect(() => {
-    if (appState !== 'chat' || !auth.currentUser) return;
+    if (appState !== 'chat' || !user) return;
 
-    const presenceRef = doc(db, `rooms/${roomCode}/presence/${auth.currentUser.uid}`);
+    const presenceRef = doc(db, `rooms/${roomCode}/presence/${user.uid}`);
     
     const updatePresence = async (typing = false) => {
       try {
         await setDoc(presenceRef, {
-          userId: auth.currentUser?.uid,
+          userId: user.uid,
           nickname,
           lastSeen: serverTimestamp(),
           isTyping: typing
@@ -281,9 +335,9 @@ export default function App() {
 
   // Firestore Listeners
   useEffect(() => {
-    if (appState !== 'chat' || !auth.currentUser) return;
+    if (appState !== 'chat' || !user) return;
 
-    const uid = auth.currentUser.uid;
+    const uid = user.uid;
 
     // 1. Messages Listener
     const messagesQuery = query(
@@ -341,7 +395,7 @@ export default function App() {
       }
     });
 
-    // 4. Room Metadata (Timer sync)
+    // 4. Room Metadata (Timer sync and Deletion check)
     const roomSnap = onSnapshot(doc(db, `rooms/${roomCode}`), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -350,6 +404,9 @@ export default function App() {
         const now = new Date();
         const diff = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000));
         setTimeLeft(diff);
+      } else if (appState === 'chat') {
+        // Room was deleted
+        setAppState('end');
       }
     });
 
@@ -400,7 +457,15 @@ export default function App() {
   };
 
   const handleJoin = async () => {
-    if (!nickname.trim() || roomCode.trim().length !== 6 || !auth.currentUser) return;
+    if (!nickname.trim() || roomCode.trim().length !== 6) {
+      alert("Masukkan nickname dan 6 digit kode ruangan.");
+      return;
+    }
+
+    if (!user) {
+      setAuthError("Harap login terlebih dahulu.");
+      return;
+    }
 
     try {
       const roomRef = doc(db, `rooms/${roomCode}`);
@@ -409,7 +474,7 @@ export default function App() {
       if (!snap.exists()) {
         // Create Room
         await setDoc(roomRef, {
-          hostId: auth.currentUser?.uid,
+          hostId: user.uid,
           createdAt: serverTimestamp(),
           expiresAt: Timestamp.fromDate(new Date(Date.now() + SESSION_DURATION * 1000))
         });
@@ -444,14 +509,14 @@ export default function App() {
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !auth.currentUser) return;
+    if (!inputMessage.trim() || !user) return;
     
     const text = inputMessage;
     setInputMessage('');
 
     try {
       await addDoc(collection(db, `rooms/${roomCode}/messages`), {
-        senderId: auth.currentUser.uid,
+        senderId: user.uid,
         nickname,
         text,
         timestamp: serverTimestamp(),
@@ -475,8 +540,8 @@ export default function App() {
 
   const handleSignOut = async () => {
     try {
-      if (roomCode && auth.currentUser) {
-        const presenceRef = doc(db, `rooms/${roomCode}/presence/${auth.currentUser.uid}`);
+      if (roomCode && user) {
+        const presenceRef = doc(db, `rooms/${roomCode}/presence/${user.uid}`);
         await deleteDoc(presenceRef);
       }
       await auth.signOut();
@@ -484,6 +549,20 @@ export default function App() {
     } catch (err) {
       console.error("Sign out fail:", err);
       setAppState('end');
+    }
+  };
+
+  const handleDissolveRoom = async () => {
+    if (!roomCode || user?.uid !== roomHostId) return;
+    
+    if (confirm("Apakah Anda yakin ingin membubarkan ruangan ini? Semua data akan hilang untuk semua orang.")) {
+      try {
+        await deleteDoc(doc(db, `rooms/${roomCode}`));
+        setAppState('end');
+      } catch (err) {
+        console.error("Dissolve room failed:", err);
+        alert("Gagal membubarkan ruangan.");
+      }
     }
   };
 
@@ -521,6 +600,9 @@ export default function App() {
             roomCode={roomCode}
             setRoomCode={setRoomCode}
             onJoin={handleJoin}
+            user={user}
+            authError={authError}
+            setAuthError={setAuthError}
           />
         ) : (
           <div className="h-screen flex flex-col relative bg-surface-page">
@@ -563,6 +645,15 @@ export default function App() {
                 >
                   <Lock className="w-5 h-5" />
                 </button>
+                {user?.uid === roomHostId && (
+                  <button 
+                    onClick={handleDissolveRoom}
+                    title="Bubarkan Ruangan"
+                    className="w-9 h-9 flex items-center justify-center bg-red-500/10 rounded-xl text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer border border-red-500/20"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                )}
                 <button 
                   onClick={handleSignOut}
                   className="w-9 h-9 flex items-center justify-center bg-dark-charcoal rounded-xl text-snow hover:bg-dim-grey transition-colors cursor-pointer"
@@ -658,7 +749,7 @@ export default function App() {
                   volume={volume}
                   setVolume={setVolume}
                   roomCode={roomCode}
-                  isHost={auth.currentUser?.uid === roomHostId}
+                  isHost={user?.uid === roomHostId}
                 />
               )}
             </AnimatePresence>
@@ -678,15 +769,21 @@ export default function App() {
 
 // --- Subcomponents ---
 
-function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: any) {
+function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin, user, authError, setAuthError }: any) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const handleGoogleLogin = async () => {
     setIsLoggingIn(true);
+    setAuthError(null);
     try {
       await signInWithGoogle();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      if (err.code === 'auth/popup-blocked') {
+        setAuthError("Popup terblokir. Harap izinkan popup di browser Anda.");
+      } else {
+        setAuthError(err.message || "Gagal masuk dengan Google.");
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -713,33 +810,46 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: an
 
       <div className="w-full max-w-[400px] bg-not-quite-black p-10 rounded-[24px] shadow-2xl z-10">
         <div className="space-y-6">
-          {auth.currentUser ? (
+          {authError && (
+            <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl">
+              <p className="text-red-400 text-xs text-center font-medium">
+                ⚠️ {authError}
+              </p>
+            </div>
+          )}
+
+          {user ? (
             <div className="bg-blurple/10 border border-blurple/20 p-3 rounded-xl flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-blurple flex items-center justify-center text-snow text-[10px] font-bold">
-                {(auth.currentUser.displayName?.[0] || 'U').toUpperCase()}
+                {(user.displayName?.[0] || 'U').toUpperCase()}
               </div>
               <div className="text-left overflow-hidden">
-                <p className="text-snow text-[10px] font-bold truncate">TERHUBUNG</p>
-                <p className="text-fog text-[11px] truncate">{auth.currentUser.displayName || auth.currentUser.email}</p>
+                <p className="text-snow text-[10px] font-bold truncate uppercase tracking-widest opacity-60">Terhubung</p>
+                <p className="text-fog text-[11px] truncate font-medium">{user.displayName || user.email || "User Anonim"}</p>
               </div>
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl">
-                <p className="text-red-400 text-xs text-center">
-                  Sesi anonim dibatasi. Silakan masuk untuk memulai.
-                </p>
-              </div>
               <button 
                 onClick={handleGoogleLogin}
                 disabled={isLoggingIn}
-                className="w-full bg-snow text-not-quite-black hover:bg-snow/90 font-bold py-3 rounded-xl flex items-center justify-center gap-3 transition-all cursor-pointer"
+                className="w-full bg-snow text-not-quite-black hover:bg-snow/90 font-bold py-3 rounded-xl flex items-center justify-center gap-3 transition-all cursor-pointer shadow-xl"
               >
-                {isLoggingIn ? "Menghubungkan..." : "Masuk dengan Google"}
+                {isLoggingIn ? "Menghubungkan..." : (
+                  <>
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                    </svg>
+                    Masuk dengan Google
+                  </>
+                )}
               </button>
               <div className="flex items-center gap-3 my-2">
                 <div className="h-px flex-1 bg-dim-grey"></div>
-                <span className="text-fog text-[10px] font-bold uppercase tracking-widest">Atau</span>
+                <span className="text-fog text-[10px] font-bold uppercase tracking-widest opacity-50">Atau tetap anonim</span>
                 <div className="h-px flex-1 bg-dim-grey"></div>
               </div>
             </div>
@@ -758,9 +868,9 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: an
                   placeholder="Panggilanku..."
                   className="w-full bg-dark-charcoal text-snow rounded-xl p-4 focus:outline-none focus:ring-1 focus:ring-blurple/50 transition-shadow transition-colors"
                 />
-                {auth.currentUser && nickname === "" && (
+                {user && nickname === "" && (
                   <button 
-                    onClick={() => setNickname(auth.currentUser?.displayName?.split(' ')[0] || '')}
+                    onClick={() => setNickname(user.displayName?.split(' ')[0] || '')}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] bg-blurple/20 text-blurple font-bold px-2 py-1 rounded-md hover:bg-blurple/30 cursor-pointer"
                   >
                     Gunakan Nama Google
@@ -786,7 +896,6 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: an
           <div className="space-y-3 pt-2">
             <button 
               onClick={onJoin}
-              disabled={!auth.currentUser}
               className="w-full bg-blurple hover:bg-dark-blurple disabled:opacity-50 font-headline font-bold text-snow py-4 rounded-xl transition-colors tracking-wide cursor-pointer"
             >
               Masuk Ruangan
