@@ -763,7 +763,7 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin }: an
                     onClick={() => setNickname(auth.currentUser?.displayName?.split(' ')[0] || '')}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] bg-blurple/20 text-blurple font-bold px-2 py-1 rounded-md hover:bg-blurple/30 cursor-pointer"
                   >
-                    Gunakan Nama Google
+                    Gunakan Nama Go
                   </button>
                 )}
               </div>
