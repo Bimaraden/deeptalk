@@ -252,6 +252,7 @@ export default function App() {
       if (roomHostId === user?.uid) {
         const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
         const nextIndex = (currentTrackIndex + 1) % activePlaylist.length;
+        console.log("Track ended, syncing next track:", nextIndex);
         syncMusic({ 
           currentTrackIndex: nextIndex, 
           progress: 0, 
@@ -261,7 +262,8 @@ export default function App() {
     };
 
     const handleTimeUpdate = () => {
-      // Update local progress for UI, but don't re-sync back to audio in this effect
+      // Only the host should push major time updates to Firestore occasionally
+      // Everyone updates local state for UI
       setMusicProgress(audio.currentTime);
     };
 
@@ -274,36 +276,49 @@ export default function App() {
     };
   }, [currentTrackIndex, user?.uid, roomHostId, roomCode]);
 
+  // Handle source changes and playback state
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
     const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
+    
+    // Use a more robust URL comparison
+    const targetSrc = new URL(currentTrack.audioUrl, window.location.origin).href;
+    const currentSrc = audio.src;
 
-    if (audio.src !== window.location.origin + currentTrack.audioUrl) {
+    if (currentSrc !== targetSrc) {
+      console.log("Changing source to:", targetSrc);
       audio.src = currentTrack.audioUrl;
       audio.load();
-      if (isPlaying) {
-        audio.currentTime = musicProgress;
-        audio.play().catch(e => console.warn("Playback blocked:", e));
-      }
-    }
-
-    if (isPlaying) {
-      // Significant drift sync (e.g. > 3 seconds)
-      if (Math.abs(audio.currentTime - musicProgress) > 3) {
-        audio.currentTime = musicProgress;
-      }
-      if (audio.paused) {
-        audio.play().catch(e => console.warn("Playback failed:", e));
-      }
+      
+      // When the new track is ready, we set the initial progress
+      const handleCanPlay = () => {
+        if (isPlaying) {
+          audio.currentTime = musicProgress;
+          audio.play().catch(e => console.warn("Playback failed on canplay:", e));
+        }
+        audio.removeEventListener('canplay', handleCanPlay);
+      };
+      audio.addEventListener('canplay', handleCanPlay);
     } else {
-      if (!audio.paused) {
-        audio.pause();
+      // If the source is the same, just sync play/pause
+      if (isPlaying) {
+        if (audio.paused) {
+          audio.play().catch(e => console.warn("Playback failed:", e));
+        }
+        // Sync progress if drift is too large
+        if (Math.abs(audio.currentTime - musicProgress) > 3) {
+          audio.currentTime = musicProgress;
+        }
+      } else {
+        if (!audio.paused) {
+          audio.pause();
+        }
       }
     }
-  }, [currentTrackIndex, isPlaying]);
+  }, [currentTrackIndex, isPlaying, musicProgress]);
 
   // Occasional Firestore sync for host
   useEffect(() => {
@@ -672,9 +687,16 @@ export default function App() {
                 <button 
                   onClick={() => setIsMusicPanelOpen(true)}
                   title="Musik"
-                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                  className={`w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px] relative ${
+                    isPlaying 
+                      ? 'bg-neo-pink hover:bg-neo-cyan animate-pulse' 
+                      : 'bg-neo-yellow hover:bg-neo-cyan'
+                  }`}
                 >
-                  <Music className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
+                  <Music className={`w-5 h-5 sm:w-6 sm:h-6 stroke-[3px] ${isPlaying ? 'animate-bounce' : ''}`} />
+                  {isPlaying && (
+                    <span className="absolute -top-1 -right-1 w-3 h-3 sm:w-4 sm:h-4 bg-neo-green border-2 border-neo-black rounded-full"></span>
+                  )}
                 </button>
                 <button 
                   onClick={() => setIsSecurityModalOpen(true)}
@@ -749,10 +771,15 @@ export default function App() {
             </div>
 
             {/* Bottom Input Area */}
-            <div className="bg-neo-white border-4 border-neo-black p-3 sm:p-4 shrink-0 shadow-neo">
-              <div className="max-w-6xl mx-auto flex items-end gap-2 sm:gap-3 px-1 sm:px-2">
-                <button className="p-1 sm:p-2 text-neo-black hover:text-neo-pink transition-colors cursor-pointer group">
-                  <Smile className="w-8 h-8 sm:w-10 sm:h-10 stroke-[3px] group-active:scale-110" />
+            <div className="bg-neo-white border-t-8 border-neo-black p-3 sm:p-6 shrink-0 relative">
+              {/* Decorative accent */}
+              <div className="hidden lg:block absolute -top-8 left-10 bg-neo-cyan border-4 border-neo-black px-4 py-1 font-black italic uppercase text-xs shadow-neo-sm">
+                Secure Transmission Line
+              </div>
+              
+              <div className="max-w-6xl mx-auto flex items-end gap-3 sm:gap-4 px-1 sm:px-2">
+                <button className="p-2 text-neo-black hover:text-neo-pink transition-all cursor-pointer group active:scale-90">
+                  <Smile className="w-10 h-10 sm:w-12 sm:h-12 stroke-[4px] group-active:scale-110" />
                 </button>
                 <div className="flex-1 relative">
                   <textarea 
@@ -765,17 +792,22 @@ export default function App() {
                         handleSendMessage();
                       }
                     }}
-                    placeholder="Kirim rahasiamu..."
-                    className="w-full bg-neo-white text-neo-black border-2 sm:border-4 border-neo-black p-3 sm:p-4 pr-10 sm:pr-12 focus:outline-none resize-none max-h-32 text-base sm:text-lg font-bold placeholder:text-gray-400 shadow-neo-sm focus:shadow-neo transition-all"
+                    placeholder="TULIS PESAN RAHASIA..."
+                    className="w-full bg-neo-white text-neo-black border-4 border-neo-black p-4 sm:p-5 pr-12 focus:outline-none resize-none max-h-40 text-lg sm:text-xl font-black placeholder:text-neutral-400 shadow-neo focus:shadow-neo-lg transition-all uppercase italic"
                     rows={1}
                   />
+                  <div className="absolute top-2 right-2 flex items-center gap-1 opacity-20 pointer-events-none hidden sm:flex">
+                    <div className="w-1 h-1 bg-neo-black rounded-full"></div>
+                    <div className="w-1 h-1 bg-neo-black rounded-full"></div>
+                    <div className="w-1 h-1 bg-neo-black rounded-full"></div>
+                  </div>
                 </div>
                 <button 
                   onClick={handleSendMessage}
                   disabled={!inputMessage.trim()}
-                  className="w-11 h-11 sm:w-14 sm:h-14 shrink-0 bg-neo-green hover:bg-neo-green/80 disabled:opacity-50 text-neo-black border-2 sm:border-4 border-neo-black flex items-center justify-center transition-all cursor-pointer shadow-neo-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+                  className="w-14 h-14 sm:w-20 sm:h-20 shrink-0 bg-neo-green hover:bg-neo-green/90 disabled:opacity-50 text-neo-black border-4 border-neo-black flex items-center justify-center transition-all cursor-pointer shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
-                  <Send className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] text-neo-black fill-neo-black" />
+                  <Send className="w-8 h-8 sm:w-10 sm:h-10 stroke-[4px] text-neo-black fill-neo-black" />
                 </button>
               </div>
             </div>
@@ -1056,163 +1088,243 @@ function MusicPanel({
       animate={{ y: 0 }}
       exit={{ y: "100%" }}
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
-      className="absolute bottom-0 left-0 right-0 h-[95vh] bg-neo-yellow rounded-none border-t-8 border-neo-black shadow-2xl z-20 flex flex-col p-4 sm:p-8"
+      className="absolute bottom-0 left-0 right-0 h-[95vh] bg-neo-yellow rounded-none border-t-8 border-neo-black shadow-2xl z-20 flex flex-col p-2 sm:p-8"
     >
-      <div className="bg-neo-white border-4 sm:border-8 border-neo-black h-full flex flex-col p-4 sm:p-6 shadow-neo-lg relative overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6 sm:mb-8 border-b-4 sm:border-b-8 border-neo-black pb-4 sm:pb-6">
-          <div className="flex flex-col">
-            <h2 className="font-headline font-black text-2xl sm:text-4xl text-neo-black uppercase italic transform -rotate-1 drop-shadow-neo-sm">
-              RADIO NEON 📻
-            </h2>
-            <span className="text-[10px] sm:text-xs bg-neo-cyan text-neo-black font-black uppercase italic px-2 py-1 border-2 border-neo-black inline-block w-fit mt-1 sm:mt-2 shadow-neo-sm">
-              On-Air Control Panel
-            </span>
-          </div>
-          <button 
-            onClick={onClose}
-            className="w-10 h-10 sm:w-16 sm:h-16 bg-neo-pink border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
-          >
-            <ChevronDown className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto pr-2 sm:pr-4 scrollbar-hide py-2 sm:py-4">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-10 h-full">
-            {/* Left side: Now Playing */}
-            <div className="space-y-6 sm:space-y-8">
-              <div className="bg-neo-cyan border-4 sm:border-8 border-neo-black p-5 sm:p-8 shadow-neo relative overflow-hidden">
-                {/* Visualizer Background */}
-                <div className="absolute inset-0 opacity-10 flex items-center justify-center pointer-events-none">
-                   <div className="w-full h-full bg-[radial-gradient(circle,black_1px,transparent_1px)] bg-[size:20px_20px]"></div>
-                </div>
-
-                {isHost && (
-                  <div className="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
-                    <button 
-                      onClick={() => handleTriggerEffect('opening')}
-                      disabled={isEffectPlaying}
-                      className="flex-1 bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-sm sm:text-base"
-                    >
-                      Intro
-                    </button>
-                    <button 
-                      onClick={() => handleTriggerEffect('closing')}
-                      disabled={isEffectPlaying}
-                      className="flex-1 bg-neo-pink border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-sm sm:text-base"
-                    >
-                      Outro
-                    </button>
-                  </div>
-                )}
-
-                <div className="text-left relative z-10">
-                  <h3 className="text-neo-black font-black text-2xl sm:text-4xl uppercase italic leading-none mb-1 sm:mb-2 drop-shadow-neo-sm">
-                    {currentTrack.title}
-                  </h3>
-                  <p className="text-neo-black font-black text-base sm:text-xl italic opacity-80 uppercase tracking-tighter">
-                    {currentTrack.artist}
-                  </p>
-                </div>
-
-                <div className="mt-8 sm:mt-10 space-y-3 sm:space-y-4 relative z-10">
-                  <div className="h-6 sm:h-10 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm p-0.5 sm:p-1">
-                    <div 
-                      className="h-full bg-neo-black transition-all duration-300" 
-                      style={{ width: `${(progress / (currentTrack.totalSeconds || 1)) * 100}%` }}
-                    />
-                  </div>
-                  <div className="flex justify-between font-black font-mono text-base sm:text-xl uppercase italic">
-                    <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:py-1">{formatTime(progress)}</span>
-                    <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:py-1">{currentTrack.duration}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-center gap-6 sm:gap-10 mt-8 sm:mt-10">
-                  <button 
-                    onClick={() => onTrackChange((currentTrackIndex - 1 + playlist.length) % playlist.length)}
-                    className="w-12 h-12 sm:w-16 sm:h-16 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
-                  >
-                    <SkipBack className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
-                  </button>
-                  <button 
-                    onClick={onTogglePlay}
-                    className="w-16 h-16 sm:w-24 sm:h-24 bg-neo-pink border-4 border-neo-black shadow-neo flex items-center justify-center text-neo-black hover:bg-neo-green hover:scale-105 transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
-                  >
-                    {isPlaying ? <Pause className="w-8 h-8 sm:w-12 sm:h-12 stroke-[3px] sm:stroke-[4px] fill-neo-black" /> : <Play className="w-8 h-8 sm:w-12 sm:h-12 stroke-[3px] sm:stroke-[4px] fill-neo-black translate-x-1" />}
-                  </button>
-                  <button 
-                    onClick={() => onTrackChange((currentTrackIndex + 1) % playlist.length)}
-                    className="w-12 h-12 sm:w-16 sm:h-16 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
-                  >
-                    <SkipForward className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
-                  </button>
-                </div>
-
-                <div className="mt-8 sm:mt-10 flex items-center gap-4 sm:gap-6 bg-neo-white border-2 sm:border-4 border-neo-black p-3 sm:p-4 shadow-neo-sm">
-                  <Volume2 className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
-                  <input 
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={volume}
-                    onChange={(e) => setVolume(Number(e.target.value))}
-                    className="flex-1 accent-neo-black border-none h-4"
-                  />
-                  <span className="font-black font-mono text-base sm:text-xl w-10 sm:w-12">{volume}%</span>
-                </div>
+      <div className="bg-neo-black h-full flex flex-col p-1 sm:p-4 shadow-neo-lg relative overflow-hidden border-4 sm:border-8 border-neo-black">
+        <div className="bg-neo-white h-full flex flex-col p-4 sm:p-8 relative overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6 sm:mb-8 border-b-4 sm:border-b-8 border-neo-black pb-4 sm:pb-6 relative shrink-0">
+            <div className="absolute -top-12 -left-8 w-24 h-24 bg-neo-yellow/20 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="flex flex-col relative z-10">
+              <h2 className="font-headline font-black text-2xl sm:text-5xl text-neo-black uppercase italic transform -rotate-2 drop-shadow-neo-sm leading-none mb-1">
+                RADIO NEON 📻
+              </h2>
+              <div className="flex items-center gap-2">
+                <span className="animate-pulse w-2.5 h-2.5 sm:w-3 sm:h-3 bg-red-600 border-2 border-neo-black rounded-full shadow-neo-sm"></span>
+                <span className="text-[9px] sm:text-xs bg-neo-black text-neo-white font-black uppercase italic px-2 py-0.5 border-2 border-neo-black inline-block w-fit">
+                  LIVE CONTROL
+                </span>
               </div>
             </div>
+            <button 
+              onClick={onClose}
+              className="w-10 h-10 sm:w-16 sm:h-16 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            >
+              <ChevronDown className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
+            </button>
+          </div>
 
-            {/* Right side: Playlist */}
-            <div className="flex flex-col h-full mt-4 lg:mt-0">
-              <h4 className="font-black uppercase text-xl sm:text-2xl mb-4 sm:mb-6 italic transform -rotate-1 inline-block bg-neo-green px-3 py-1.5 sm:px-4 sm:py-2 border-2 sm:border-4 border-neo-black shadow-neo-sm w-fit">
-                Antrian Radio
-              </h4>
-              <div className="flex-1 space-y-3 sm:space-y-4 overflow-y-auto pr-2 sm:pr-4 scrollbar-hide">
-                {playlist.map((track, index) => (
-                  <div 
-                    key={index}
-                    className={`flex items-center gap-4 sm:gap-6 p-3 sm:p-4 border-2 sm:border-4 border-neo-black shadow-neo-sm transition-all group ${
-                      index === currentTrackIndex 
-                        ? 'bg-neo-yellow scale-[1.01] shadow-neo' 
-                        : 'bg-neo-white hover:bg-neo-cyan/20'
-                    }`}
-                  >
-                    <span className="font-black text-xl sm:text-2xl italic font-mono w-6 sm:w-8 shrink-0 border-r-2 sm:border-r-4 border-neo-black mr-1 sm:mr-2">
-                      {index + 1}
-                    </span>
-                    <div 
-                      className="flex-1 cursor-pointer overflow-hidden"
-                      onClick={() => onTrackChange(index)}
-                    >
-                      <h5 className="font-black text-lg sm:text-xl leading-none uppercase truncate mb-0.5 sm:mb-1">
-                        {track.title}
-                      </h5>
-                      <p className="font-bold text-[10px] sm:text-sm uppercase italic opacity-70 truncate">{track.artist}</p>
-                    </div>
-                    {isHost ? (
-                      <div className="flex flex-col gap-1 shrink-0">
+          <div className="flex-1 overflow-y-auto pr-2 sm:pr-4 scrollbar-hide">
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-8 sm:gap-12 pb-12 items-start">
+              {/* Left side: Now Playing (Hero) */}
+              <div className="lg:col-span-3 space-y-6 sm:space-y-8">
+                <div className="bg-neo-white border-4 sm:border-8 border-neo-black p-4 sm:p-10 shadow-neo relative overflow-hidden group">
+                  {/* Retro Pattern Background */}
+                  <div className="absolute inset-0 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
+                    <div className="w-full h-full bg-[radial-gradient(circle,black_2px,transparent_2px)] bg-[size:24px_24px]"></div>
+                  </div>
+                  
+                  {isHost && (
+                    <div className="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-10 relative z-10">
+                      <div className="flex-1 flex flex-col gap-1">
+                        <span className="text-[9px] sm:text-[10px] font-black uppercase italic opacity-50 ml-1">Mic Intro</span>
                         <button 
-                          onClick={(e) => { e.stopPropagation(); handleReorder(index, 'up'); }}
-                          disabled={index === 0}
-                          className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-pink disabled:opacity-0 active:translate-y-[-2px]"
+                          onClick={() => handleTriggerEffect('opening')}
+                          disabled={isEffectPlaying}
+                          className="w-full bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-xs sm:text-base active:translate-y-1 active:shadow-none"
                         >
-                          <ChevronDown className="w-5 h-5 sm:w-6 sm:h-6 rotate-180 stroke-[3px]" />
-                        </button>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); handleReorder(index, 'down'); }}
-                          disabled={index === playlist.length - 1}
-                          className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-cyan disabled:opacity-0 active:translate-y-[2px]"
-                        >
-                          <ChevronDown className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
+                          OPEN 🎙️
                         </button>
                       </div>
-                    ) : (
-                       <span className="font-black font-mono text-xs sm:text-sm uppercase italic">{track.duration}</span>
-                    )}
+                      <div className="flex-1 flex flex-col gap-1">
+                        <span className="text-[9px] sm:text-[10px] font-black uppercase italic opacity-50 ml-1">Mic Outro</span>
+                        <button 
+                          onClick={() => handleTriggerEffect('closing')}
+                          disabled={isEffectPlaying}
+                          className="w-full bg-neo-pink border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-xs sm:text-base active:translate-y-1 active:shadow-none"
+                        >
+                          CLOSE 🎙️
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="relative z-10 space-y-8 sm:space-y-12">
+                    <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-10">
+                      {/* Album Art Placeholder / Visualizer */}
+                      <div className="w-40 h-40 sm:w-64 sm:h-64 bg-neo-black border-4 sm:border-8 border-neo-black shadow-neo shrink-0 relative overflow-hidden flex items-center justify-center p-3 sm:p-4 group/vinyl">
+                        {/* Vinyl Record Visual */}
+                        <div className={`absolute inset-0 border-4 sm:border-8 border-neo-black rounded-full overflow-hidden transition-transform duration-1000 ${isPlaying ? 'animate-spin-slow' : ''}`}>
+                          <div className="absolute inset-0 bg-neutral-900 flex items-center justify-center">
+                            {[...Array(12)].map((_, i) => (
+                              <div 
+                                key={i} 
+                                className="absolute border border-white/5 rounded-full" 
+                                style={{ 
+                                  width: `${100 - i * 8}%`, 
+                                  height: `${100 - i * 8}%` 
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="absolute inset-0 opacity-20 flex items-center justify-center gap-1 pointer-events-none">
+                          {[...Array(6)].map((_, i) => (
+                            <motion.div 
+                              key={i}
+                              animate={{ height: isPlaying ? [10, 100, 30, 80, 10] : 10 }}
+                              transition={{ duration: 1, repeat: Infinity, delay: i * 0.1 }}
+                              className="w-2 sm:w-3 bg-neo-cyan"
+                            />
+                          ))}
+                        </div>
+
+                        <div className="relative z-10 w-20 h-20 sm:w-28 sm:h-28 bg-neo-yellow rounded-full border-4 border-neo-black flex items-center justify-center shadow-inner overflow-hidden">
+                           <div className="absolute inset-0 bg-[radial-gradient(circle,black_1px,transparent_1px)] bg-[size:10px_10px] opacity-10"></div>
+                           <Music className={`w-8 h-8 sm:w-12 sm:h-12 text-neo-black ${isPlaying ? 'animate-bounce' : ''}`} />
+                           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-neo-black rounded-full border-2 border-neo-white/30"></div>
+                        </div>
+                      </div>
+
+                      <div className="text-center sm:text-left flex-1 min-w-0">
+                        <div className="inline-block bg-neo-cyan text-neo-black px-2 py-1 border-2 border-neo-black font-black uppercase text-[9px] sm:text-[10px] italic mb-2 sm:mb-4 shadow-neo-sm">
+                          {isPlaying ? 'ON AIR' : 'PAUSED'}
+                        </div>
+                        <h3 className="text-neo-black font-black text-3xl sm:text-6xl uppercase italic leading-[1] sm:leading-[0.9] mb-2 sm:mb-4 drop-shadow-neo-sm line-clamp-2">
+                          {currentTrack.title}
+                        </h3>
+                        <p className="text-neo-black font-black text-lg sm:text-2xl italic opacity-70 uppercase tracking-tight">
+                          {currentTrack.artist}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 sm:space-y-6">
+                      <div className="relative mt-4">
+                        <div className="h-4 sm:h-6 bg-neo-black border-2 sm:border-4 border-neo-black shadow-neo-sm p-1 overflow-hidden">
+                          <motion.div 
+                            className="h-full bg-neo-green relative" 
+                            style={{ width: `${(progress / (currentTrack.totalSeconds || 1)) * 100}%` }}
+                          >
+                            <div className="absolute top-0 right-0 bottom-0 w-2 bg-white/30"></div>
+                          </motion.div>
+                        </div>
+                        <div className="flex justify-between font-black font-mono text-sm sm:text-2xl uppercase italic mt-2 sm:mt-4">
+                          <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:px-3 sm:py-1 border-2 border-neo-black">{formatTime(progress)}</span>
+                          <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:px-3 sm:py-1 border-2 border-neo-black">{currentTrack.duration}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-center gap-4 sm:gap-10 py-4 sm:py-6">
+                        <button 
+                          onClick={() => onTrackChange((currentTrackIndex - 1 + playlist.length) % playlist.length)}
+                          className="w-12 h-12 sm:w-20 sm:h-20 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+                        >
+                          <SkipBack className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
+                        </button>
+                        <button 
+                          onClick={onTogglePlay}
+                          className="w-16 h-16 sm:w-32 sm:h-32 bg-neo-pink border-4 border-neo-black shadow-neo-lg flex items-center justify-center text-neo-black hover:bg-neo-green transition-all cursor-pointer active:translate-x-[4px] active:translate-y-[4px] active:shadow-none"
+                        >
+                          {isPlaying ? (
+                            <Pause className="w-8 h-8 sm:w-16 sm:h-16 stroke-[3px] sm:stroke-[4px] fill-neo-black" />
+                          ) : (
+                            <Play className="w-8 h-8 sm:w-16 sm:h-16 stroke-[3px] sm:stroke-[4px] fill-neo-black translate-x-1 sm:translate-x-2" />
+                          )}
+                        </button>
+                        <button 
+                          onClick={() => onTrackChange((currentTrackIndex + 1) % playlist.length)}
+                          className="w-12 h-12 sm:w-20 sm:h-20 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+                        >
+                          <SkipForward className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-4 sm:gap-6 bg-neo-black text-neo-white p-3 sm:p-6 border-2 sm:border-4 border-neo-black shadow-neo">
+                        <Volume2 className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
+                        <div className="flex-1 relative h-6 sm:h-8 flex items-center">
+                          <input 
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={volume}
+                            onChange={(e) => setVolume(Number(e.target.value))}
+                            className="w-full h-2 sm:h-4 bg-neo-white border-2 border-neo-black appearance-none cursor-pointer accent-neo-pink [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 sm:[&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6 sm:[&::-webkit-slider-thumb]:h-10 [&::-webkit-slider-thumb]:bg-neo-pink [&::-webkit-slider-thumb]:border-2 sm:[&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-neo-black [&::-webkit-slider-thumb]:shadow-neo-sm"
+                          />
+                        </div>
+                        <span className="font-black font-mono text-lg sm:text-2xl w-10 sm:w-16 text-center">{volume}%</span>
+                      </div>
+                    </div>
                   </div>
-                ))}
+                </div>
+              </div>
+
+              {/* Right side: Playlist */}
+              <div className="lg:col-span-2 flex flex-col h-full lg:max-h-full">
+                <div className="relative mb-4 sm:mb-6 shrink-0">
+                  <h4 className="font-black uppercase text-xl sm:text-3xl italic transform -rotate-1 inline-block bg-neo-green px-4 py-2 sm:px-6 sm:py-3 border-2 sm:border-4 border-neo-black shadow-neo relative z-10">
+                    PLAYLIST 📼
+                  </h4>
+                  <div className="absolute top-1 sm:top-2 left-1 sm:left-2 w-full h-full bg-neo-black border-2 sm:border-4 border-neo-black -z-0"></div>
+                </div>
+                
+                <div className="flex-1 space-y-3 sm:space-y-4 overflow-y-auto pr-1 sm:pr-4 scrollbar-hide py-2">
+                  {playlist.map((track, index) => (
+                    <div 
+                      key={index}
+                      className={`flex items-center gap-3 sm:gap-6 p-3 sm:p-4 border-2 sm:border-4 border-neo-black transition-all relative ${
+                        index === currentTrackIndex 
+                          ? 'bg-neo-yellow translate-x-1 sm:translate-x-3 shadow-neo' 
+                          : 'bg-neo-white hover:bg-neo-cyan/20 translate-x-0 shadow-neo-sm'
+                      }`}
+                    >
+                      <div className="flex flex-col items-center">
+                        <span className="font-black text-lg sm:text-2xl italic font-mono w-6 sm:w-10 text-center">
+                          {(index + 1).toString().padStart(2, '0')}
+                        </span>
+                        {index === currentTrackIndex && (
+                          <motion.div 
+                            animate={{ scale: [1, 1.2, 1] }} 
+                            transition={{ repeat: Infinity, duration: 1 }}
+                            className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-red-600 rounded-full border-2 border-neo-black mt-1"
+                          />
+                        )}
+                      </div>
+                      
+                      <div 
+                        className="flex-1 cursor-pointer overflow-hidden py-0.5 sm:py-1"
+                        onClick={() => onTrackChange(index)}
+                      >
+                        <h5 className="font-black text-base sm:text-xl leading-tight uppercase truncate mb-0.5 sm:mb-1">
+                          {track.title}
+                        </h5>
+                        <p className="font-bold text-[9px] sm:text-xs uppercase italic opacity-60 truncate">{track.artist}</p>
+                      </div>
+
+                      {isHost ? (
+                        <div className="flex flex-col gap-1 sm:gap-2 shrink-0 border-l-2 sm:border-l-4 border-neo-black pl-2 sm:pl-4">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleReorder(index, 'up'); }}
+                            disabled={index === 0}
+                            className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-pink disabled:opacity-0 active:translate-y-[-2px] transition-all"
+                          >
+                            <ChevronDown className="w-4 h-4 sm:w-6 sm:h-6 rotate-180 stroke-[3px] sm:stroke-[4px]" />
+                          </button>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleReorder(index, 'down'); }}
+                            disabled={index === playlist.length - 1}
+                            className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-cyan disabled:opacity-0 active:translate-y-[2px] transition-all"
+                          >
+                            <ChevronDown className="w-4 h-4 sm:w-6 sm:h-6 stroke-[3px] sm:stroke-[4px]" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="font-black font-mono text-[10px] sm:text-sm uppercase italic opacity-40">{track.duration}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
