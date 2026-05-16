@@ -29,6 +29,7 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
 // Database ID is required for custom provisioned databases in AI Studio
+<<<<<<< Updated upstream
 const rawConfig = firebaseConfig as any;
 const getNestedValue = (obj: any, key: string): any => {
   if (!obj) return undefined;
@@ -46,6 +47,12 @@ if (typeof window !== 'undefined') {
 if (!databaseId) {
   console.warn('Firebase config keys:', Object.keys(rawConfig));
   console.error('CRITICAL: firestoreDatabaseId NOT found in firebase-applet-config.json');
+=======
+const databaseId = (firebaseConfig as any).firestoreDatabaseId;
+if (!databaseId) {
+  console.warn('firestoreDatabaseId not found in config. Keys present:', Object.keys(firebaseConfig));
+  console.warn('Falling back to (default)');
+>>>>>>> Stashed changes
 } else {
   console.log('Initializing Firestore with databaseId:', databaseId);
 }
