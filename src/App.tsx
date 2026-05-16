@@ -495,7 +495,7 @@ export default function App() {
             SESI TELAH BERAKHIR
           </h1>
           <p className="text-fog text-lg mb-8">
-            Semua pesan telah dihapus. Tidak ada jejak yang tertinggal. 🌙
+            Semua pesan telah dihapus. T jejak yang tertinggal. 🌙
           </p>
           <button 
             onClick={() => window.location.reload()}
