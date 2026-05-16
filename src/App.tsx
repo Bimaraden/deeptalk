@@ -511,7 +511,7 @@ export default function App() {
   return (
     <div className="min-h-screen font-sans bg-surface-page overflow-hidden">
       <audio ref={audioRef} />
-    <audio ref={introAudioRef} src="/audio/opening.mp3" />
+    <audio ref={introAudioRef} src="/pubblic/audio/opening.mp3" />
     <audio ref={outroAudioRef} src="/audio/closing.mp3" />
       <AnimatePresence mode="wait">
         {appState === 'join' ? (
