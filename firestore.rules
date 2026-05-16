@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidRoom(data) {
+      return data.keys().hasAll(['createdAt', 'expiresAt']) 
+        && data.keys().size() == 2
+        && data.createdAt == request.time
+        && data.expiresAt is timestamp;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderId', 'nickname', 'text', 'timestamp', 'type'])
+        && data.keys().size() == 5
+        && (data.senderId == request.auth.uid || data.senderId == 'system')
+        && data.nickname is string && data.nickname.size() <= 32
+        && data.text is string && data.text.size() <= 2000
+        && data.timestamp == request.time
+        && (data.type == 'chat' || data.type == 'system');
+    }
+
+    function isValidPresence(data) {
+      return data.keys().hasAll(['userId', 'nickname', 'lastSeen'])
+        && data.keys().size() >= 3 && data.keys().size() <= 4
+        && data.userId == request.auth.uid
+        && data.nickname is string && data.nickname.size() <= 32
+        && data.lastSeen == request.time;
+    }
+
+    function isValidMusicState(data) {
+      return data.keys().hasAll(['currentTrackIndex', 'isPlaying', 'progress', 'updatedAt'])
+        && data.keys().size() == 4
+        && data.currentTrackIndex is int 
+        && data.isPlaying is bool
+        && data.progress is int && data.progress >= 0
+        && data.updatedAt == request.time;
+    }
+
+    // --- Room Rules ---
+
+    match /rooms/{roomCode} {
+      // Access to room metadata
+      allow get: if isSignedIn() && isValidId(roomCode);
+      allow create: if isSignedIn() && isValidId(roomCode) && isValidRoom(incoming());
+
+      // Messages sub-collection
+      match /messages/{messageId} {
+        // Enforce relational sync: room must exist
+        allow list: if isSignedIn() && exists(/databases/$(database)/documents/rooms/$(roomCode));
+        allow create: if isSignedIn() 
+          && isValidId(messageId) 
+          && isValidMessage(incoming())
+          && exists(/databases/$(database)/documents/rooms/$(roomCode));
+      }
+
+      // Presence sub-collection
+      match /presence/{userId} {
+        allow list: if isSignedIn();
+        allow get: if isSignedIn() && isValidId(userId);
+        allow write: if isSignedIn() 
+          && userId == request.auth.uid 
+          && isValidId(userId) 
+          && isValidPresence(incoming());
+      }
+
+      // Music state (single document per room)
+      match /music/current {
+        allow get: if isSignedIn();
+        allow write: if isSignedIn() && isValidMusicState(incoming());
+      }
+
+      match /music/playlist {
+        allow get: if isSignedIn();
+        allow write: if isSignedIn();
+      }
+    }
+  }
+}

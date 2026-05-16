@@ -1,0 +1,8 @@
+{
+  "name": "DeepTalk",
+  "description": "A private, ephemeral chat room for two with a built-in shared music radio, inspired by Discord design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

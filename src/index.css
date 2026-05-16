@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Nunito:wght@700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-headline: "Nunito", sans-serif;
+
+  --color-blurple: #5865f2;
+  --color-dark-blurple: #3442d9;
+  --color-spring-green: #57f287;
+  --color-fog: #babcd9;
+  --color-snow: #ffffff;
+  --color-not-quite-black: #23272a;
+  --color-dark-charcoal: #2c2f33;
+  --color-dim-grey: #50555f;
+  --color-surface-page: #0e0f2d;
+}
+
+@layer base {
+  body {
+    @apply bg-surface-page text-snow font-sans antialiased selection:bg-blurple/30;
+  }
+}
+
+@keyframes bounce-dots {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-5px); }
+}
+
+.animate-bounce-dots {
+  animation: bounce-dots 1.4s infinite ease-in-out both;
+}
+
+@keyframes eq {
+  0% { height: 4px; }
+  50% { height: 20px; }
+  100% { height: 4px; }
+}
+
+.animate-eq {
+  animation: eq 0.6s infinite ease-in-out;
+}
+
+/* Hide scrollbar but allow scrolling */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

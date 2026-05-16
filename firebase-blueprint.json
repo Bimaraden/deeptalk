@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A private chat session",
+      "type": "object",
+      "properties": {
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["createdAt", "expiresAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "nickname": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["chat", "system"] }
+      },
+      "required": ["senderId", "text", "timestamp", "type"]
+    },
+    "Presence": {
+      "title": "Presence",
+      "description": "User presence in the room",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "nickname": { "type": "string" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "nickname", "lastSeen"]
+    },
+    "MusicState": {
+      "title": "MusicState",
+      "description": "Shared music playback state",
+      "type": "object",
+      "properties": {
+        "currentTrackIndex": { "type": "integer" },
+        "isPlaying": { "type": "boolean" },
+        "progress": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["currentTrackIndex", "isPlaying", "progress", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "rooms/{roomCode}": {
+      "schema": "Room",
+      "description": "Base room document"
+    },
+    "rooms/{roomCode}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages in the room"
+    },
+    "rooms/{roomCode}/presence/{userId}": {
+      "schema": "Presence",
+      "description": "Presence tracker for users"
+    },
+    "rooms/{roomCode}/music/current": {
+      "schema": "MusicState",
+      "description": "Global music state for the room"
+    }
+  }
+}
