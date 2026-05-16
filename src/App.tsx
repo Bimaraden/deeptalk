@@ -83,10 +83,10 @@ const PLAYLIST: Track[] = [
     title: "Bayangkan", 
     artist: "Hindia", 
     duration: "4:00", 
-    totalSeconds: 2,
+    totalSeconds: 240,
     audioUrl: "/audio/Bayangkan_spotdown.org.mp3" 
   },
-  {
+  { 
     title: "Firasat", 
     artist: "Marcell", 
     duration: "4:00", 
@@ -201,6 +201,7 @@ export default function App() {
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const introAudioRef = useRef<HTMLAudioElement | null>(null);
   const outroAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -239,24 +240,6 @@ export default function App() {
     return unsub;
   }, [appState, roomCode]);
 
-  // Music Simulation
-  useEffect(() => {
-    if (!isPlaying) return;
-
-    const interval = setInterval(() => {
-      setMusicProgress((prev) => {
-        const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
-        const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
-        if (prev >= currentTrack.totalSeconds) {
-          return currentTrack.totalSeconds; 
-        }
-        return prev + 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, currentTrackIndex]);
-
   // Audio Player Sync
   useEffect(() => {
     if (!audioRef.current) {
@@ -264,23 +247,76 @@ export default function App() {
     }
 
     const audio = audioRef.current;
+
+    const handleEnded = () => {
+      if (roomHostId === user?.uid) {
+        const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
+        const nextIndex = (currentTrackIndex + 1) % activePlaylist.length;
+        syncMusic({ 
+          currentTrackIndex: nextIndex, 
+          progress: 0, 
+          isPlaying: true 
+        });
+      }
+    };
+
+    const handleTimeUpdate = () => {
+      // Update local progress for UI, but don't re-sync back to audio in this effect
+      setMusicProgress(audio.currentTime);
+    };
+
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+
+    return () => {
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+    };
+  }, [currentTrackIndex, user?.uid, roomHostId, roomCode]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
     const activePlaylist = (window as any)._activePlaylist || PLAYLIST;
     const currentTrack = activePlaylist[currentTrackIndex] || activePlaylist[0];
 
-    if (audio.src !== currentTrack.audioUrl) {
+    if (audio.src !== window.location.origin + currentTrack.audioUrl) {
       audio.src = currentTrack.audioUrl;
       audio.load();
+      if (isPlaying) {
+        audio.currentTime = musicProgress;
+        audio.play().catch(e => console.warn("Playback blocked:", e));
+      }
     }
 
     if (isPlaying) {
-      if (Math.abs(audio.currentTime - musicProgress) > 2) {
+      // Significant drift sync (e.g. > 3 seconds)
+      if (Math.abs(audio.currentTime - musicProgress) > 3) {
         audio.currentTime = musicProgress;
       }
-      audio.play().catch(e => console.warn("Autoplay blocked:", e));
+      if (audio.paused) {
+        audio.play().catch(e => console.warn("Playback failed:", e));
+      }
     } else {
-      audio.pause();
+      if (!audio.paused) {
+        audio.pause();
+      }
     }
-  }, [currentTrackIndex, isPlaying, musicProgress]);
+  }, [currentTrackIndex, isPlaying]);
+
+  // Occasional Firestore sync for host
+  useEffect(() => {
+    if (appState !== 'chat' || !isPlaying || user?.uid !== roomHostId) return;
+
+    const interval = setInterval(() => {
+      if (audioRef.current) {
+        syncMusic({ progress: audioRef.current.currentTime });
+      }
+    }, 5000); // Sync progress to Firestore every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [appState, isPlaying, user?.uid, roomHostId, roomCode]);
 
   // Volume Sync
   useEffect(() => {
@@ -482,7 +518,7 @@ export default function App() {
         // Create initial music state
         await setDoc(doc(db, `rooms/${roomCode}/music/current`), {
           currentTrackIndex: 0,
-          isPlaying: true,
+          isPlaying: false,
           progress: 0,
           updatedAt: serverTimestamp()
         });
@@ -568,19 +604,19 @@ export default function App() {
 
   if (appState === 'end') {
     return (
-      <div className="min-h-screen bg-surface-page flex items-center justify-center p-6 text-center">
-        <div className="max-w-md">
-          <h1 className="font-headline font-extrabold text-4xl mb-4 text-snow tracking-tight uppercase">
-            SESI TELAH BERAKHIR
+      <div className="min-h-screen bg-neo-yellow flex items-center justify-center p-6 text-center">
+        <div className="max-w-md bg-neo-white border-4 border-neo-black p-10 shadow-neo-lg rounded-none">
+          <h1 className="font-headline font-black text-5xl mb-6 text-neo-black tracking-tighter uppercase leading-none italic">
+            SESI SELESAI!
           </h1>
-          <p className="text-fog text-lg mb-8">
-            Semua pesan telah dihapus. Tidak ada jejak yang tertinggal. 🌙
+          <p className="text-neo-black font-bold text-xl mb-10 leading-tight">
+            Semua pesan telah dihancurkan. Tidak ada jejak yang tersisa. 💥
           </p>
           <button 
             onClick={() => window.location.reload()}
-            className="w-full bg-blurple hover:bg-dark-blurple text-snow font-bold py-4 rounded-xl transition-colors cursor-pointer"
+            className="w-full bg-neo-pink text-neo-black border-4 border-neo-black shadow-neo font-black py-5 uppercase text-xl hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
           >
-            Mulai Sesi Baru
+            Mulai Ulang
           </button>
         </div>
       </div>
@@ -588,7 +624,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen font-sans bg-surface-page overflow-hidden">
+    <div className="min-h-screen font-sans bg-neo-yellow overflow-hidden text-neo-black">
       <audio ref={audioRef} />
       <audio ref={introAudioRef} src="/audio/opening.mp3" />
       <audio ref={outroAudioRef} src="/audio/closing.mp3" />
@@ -605,114 +641,122 @@ export default function App() {
             setAuthError={setAuthError}
           />
         ) : (
-          <div className="h-screen flex flex-col relative bg-surface-page">
+          <div className="h-screen flex flex-col relative bg-neo-yellow p-2 sm:p-4">
             {/* Top Bar */}
-            <div className="bg-not-quite-black border-b border-dim-grey px-4 py-3 flex items-center justify-between z-10 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blurple to-dark-blurple flex items-center justify-center text-snow font-bold">
-                  {(partnerPresence?.nickname?.[0] || 'P').toUpperCase()}💜
+            <div className="bg-neo-white border-4 border-neo-black px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-10 shrink-0 shadow-neo mb-2 sm:mb-4">
+              <div className="flex items-center gap-3 sm:gap-4 overflow-hidden">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 shrink-0 border-2 sm:border-4 border-neo-black bg-neo-pink flex items-center justify-center text-neo-black font-black text-lg sm:text-xl shadow-neo-sm">
+                  {(partnerPresence?.nickname?.[0] || 'P').toUpperCase()}
                 </div>
-                <div>
-                  <h3 className="text-snow font-medium leading-tight">
-                    {partnerPresence?.nickname || 'Menunggu pasangan...'}
+                <div className="overflow-hidden">
+                  <h3 className="text-neo-black font-black text-sm sm:text-lg leading-none uppercase italic truncate">
+                    {partnerPresence?.nickname || 'Menunggu...'}
                   </h3>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${partnerPresence ? 'bg-spring-green' : 'bg-dim-grey'}`}></span>
-                    <span className="text-fog text-xs">{partnerPresence ? 'Online' : 'Offline'}</span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={`w-2.5 h-2.5 sm:w-3 sm:h-3 border-2 border-neo-black shadow-neo-sm ${partnerPresence ? 'bg-neo-green' : 'bg-gray-400'}`}></span>
+                    <span className="text-neo-black font-bold text-[10px] sm:text-xs uppercase">{partnerPresence ? 'Online' : 'Offline'}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="hidden sm:flex items-center gap-4">
-                <span className="px-3 py-1 bg-dark-charcoal rounded-full text-fog text-xs font-medium tracking-widest uppercase">
-                  {roomCode}
+              <div className="hidden md:flex items-center gap-6">
+                <span className="px-4 py-2 bg-neo-cyan border-2 border-neo-black shadow-neo-sm text-neo-black text-sm font-black uppercase italic">
+                  ID: {roomCode}
                 </span>
-                <span className="text-snow font-mono text-sm tabular-nums">
+                <div className="bg-neo-black text-neo-white px-4 py-2 shadow-neo-sm font-mono text-lg font-black tabular-nums">
                   {formatTimer(timeLeft)}
-                </span>
+                </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 sm:gap-3">
                 <button 
                   onClick={() => setIsMusicPanelOpen(true)}
-                  className="w-9 h-9 flex items-center justify-center bg-dark-charcoal rounded-xl text-snow hover:bg-dim-grey transition-colors cursor-pointer"
+                  title="Musik"
+                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
                 >
-                  <Music className="w-5 h-5" />
+                  <Music className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
                 </button>
                 <button 
                   onClick={() => setIsSecurityModalOpen(true)}
-                  className="w-9 h-9 flex items-center justify-center bg-dark-charcoal rounded-xl text-snow hover:bg-dim-grey transition-colors cursor-pointer"
+                  title="Keamanan"
+                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
                 >
-                  <Lock className="w-5 h-5" />
+                  <Lock className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
                 </button>
                 {user?.uid === roomHostId && (
                   <button 
                     onClick={handleDissolveRoom}
-                    title="Bubarkan Ruangan"
-                    className="w-9 h-9 flex items-center justify-center bg-red-500/10 rounded-xl text-red-500 hover:bg-red-500/20 transition-colors cursor-pointer border border-red-500/20"
+                    title="Bubarkan"
+                    className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-red-400 border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-red-500 transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
                   >
-                    <Trash2 className="w-5 h-5" />
+                    <Trash2 className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
                   </button>
                 )}
                 <button 
                   onClick={handleSignOut}
-                  className="w-9 h-9 flex items-center justify-center bg-dark-charcoal rounded-xl text-snow hover:bg-dim-grey transition-colors cursor-pointer"
+                  title="Keluar"
+                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-pink transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
                 >
-                  <LogOut className="w-5 h-5" />
+                  <LogOut className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
                 </button>
               </div>
             </div>
 
-            {/* Message Area */}
-            <div 
-              ref={scrollRef}
-              className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 scrollbar-hide bg-surface-page pb-24"
-            >
-              {messages.map((msg) => (
-                msg.sender === 'system' ? (
-                  <div key={msg.id} className="flex justify-center my-2">
-                    <span className="bg-blurple/15 text-fog text-xs px-4 py-1.5 rounded-full border border-blurple/10">
-                      {msg.text}
-                    </span>
-                  </div>
-                ) : (
-                  <div 
-                    key={msg.id} 
-                    className={`flex flex-col ${msg.sender === 'me' ? 'items-end' : 'items-start'} max-w-[85%] ${msg.sender === 'me' ? 'ml-auto' : ''}`}
-                  >
-                    <span className="text-fog text-[11px] mb-1 px-1">{msg.nickname}</span>
-                    <div className={`px-4 py-2.5 ${
-                      msg.sender === 'me' 
-                        ? 'bg-blurple text-snow rounded-[18px_18px_4px_18px]' 
-                        : 'bg-dark-charcoal text-fog rounded-[18px_18px_18px_4px]'
-                    }`}>
-                      {msg.text}
+            {/* Content Area (Messages + Sidebar) */}
+            <div className="flex-1 flex gap-2 sm:gap-4 overflow-hidden mb-2 sm:mb-4">
+              {/* Message Area */}
+              <div 
+                ref={scrollRef}
+                className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-4 sm:gap-6 scrollbar-hide bg-neo-white border-4 border-neo-black shadow-neo relative"
+              >
+                {messages.map((msg) => (
+                  msg.sender === 'system' ? (
+                    <div key={msg.id} className="flex justify-center my-2 sm:my-4">
+                      <span className="bg-neo-cyan/20 border-2 border-neo-black text-neo-black text-[10px] sm:text-xs font-black px-4 sm:px-6 py-1.5 sm:py-2 shadow-neo-sm uppercase italic">
+                        {msg.text}
+                      </span>
                     </div>
-                    <span className="text-fog text-[10px] mt-1 px-1">{msg.timestamp}</span>
-                  </div>
-                )
-              ))}
+                  ) : (
+                    <div 
+                      key={msg.id} 
+                      className={`flex flex-col ${msg.sender === 'me' ? 'items-end' : 'items-start'} max-w-[90%] sm:max-w-[85%] ${msg.sender === 'me' ? 'ml-auto' : ''}`}
+                    >
+                      <span className="text-neo-black font-black text-[10px] sm:text-xs mb-1 sm:mb-2 px-1 uppercase tracking-tight italic flex items-center gap-1">
+                        {msg.nickname} <span className="text-[9px] sm:text-[10px] opacity-40 font-mono">[{msg.timestamp}]</span>
+                      </span>
+                      <div className={`px-4 sm:px-6 py-2.5 sm:py-4 border-2 sm:border-4 border-neo-black shadow-neo text-sm sm:text-lg font-bold leading-tight ${
+                        msg.sender === 'me' 
+                          ? 'bg-neo-pink text-neo-black' 
+                          : 'bg-neo-cyan text-neo-black'
+                      }`}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  )
+                ))}
 
-              {partnerPresence?.isTyping && (
-                <div className="flex flex-col items-start">
-                  <span className="text-fog text-[11px] mb-1 px-1">{partnerPresence.nickname}</span>
-                  <div className="bg-dark-charcoal px-4 py-3 rounded-[18px_18px_18px_4px] flex gap-1">
-                    <div className="w-1.5 h-1.5 bg-dim-grey rounded-full animate-bounce-dots text-transparent">.</div>
-                    <div className="w-1.5 h-1.5 bg-dim-grey rounded-full animate-bounce-dots delay-150 text-transparent">.</div>
-                    <div className="w-1.5 h-1.5 bg-dim-grey rounded-full animate-bounce-dots delay-300 text-transparent">.</div>
+                {partnerPresence?.isTyping && (
+                  <div className="flex flex-col items-start mt-2">
+                    <span className="text-neo-black font-black text-[10px] sm:text-xs mb-1 px-1 uppercase italic">{partnerPresence.nickname} Mengetik...</span>
+                    <div className="bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm px-4 sm:px-6 py-2 sm:py-3 flex gap-1.5 sm:gap-2">
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots"></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots delay-150"></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots delay-300"></div>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
-            {/* Bottom Input */}
-            <div className="bg-not-quite-black border-t border-dim-grey p-3 shrink-0">
-              <div className="max-w-4xl mx-auto flex items-end gap-3">
-                <button className="p-2 text-fog hover:text-snow cursor-pointer">
-                  <Smile className="w-6 h-6" />
+            {/* Bottom Input Area */}
+            <div className="bg-neo-white border-4 border-neo-black p-3 sm:p-4 shrink-0 shadow-neo">
+              <div className="max-w-6xl mx-auto flex items-end gap-2 sm:gap-3 px-1 sm:px-2">
+                <button className="p-1 sm:p-2 text-neo-black hover:text-neo-pink transition-colors cursor-pointer group">
+                  <Smile className="w-8 h-8 sm:w-10 sm:h-10 stroke-[3px] group-active:scale-110" />
                 </button>
                 <div className="flex-1 relative">
                   <textarea 
+                    ref={textareaRef}
                     value={inputMessage}
                     onChange={(e) => setInputMessage(e.target.value)}
                     onKeyDown={(e) => {
@@ -721,17 +765,17 @@ export default function App() {
                         handleSendMessage();
                       }
                     }}
-                    placeholder="Tulis sesuatu yang jujur..."
-                    className="w-full bg-dark-charcoal text-snow rounded-xl p-3 pr-12 focus:outline-none resize-none max-h-32 text-sm placeholder:text-fog/50"
+                    placeholder="Kirim rahasiamu..."
+                    className="w-full bg-neo-white text-neo-black border-2 sm:border-4 border-neo-black p-3 sm:p-4 pr-10 sm:pr-12 focus:outline-none resize-none max-h-32 text-base sm:text-lg font-bold placeholder:text-gray-400 shadow-neo-sm focus:shadow-neo transition-all"
                     rows={1}
                   />
                 </div>
                 <button 
                   onClick={handleSendMessage}
                   disabled={!inputMessage.trim()}
-                  className="w-10 h-10 shrink-0 bg-blurple hover:bg-dark-blurple disabled:opacity-50 text-snow rounded-xl flex items-center justify-center transition-colors cursor-pointer"
+                  className="w-11 h-11 sm:w-14 sm:h-14 shrink-0 bg-neo-green hover:bg-neo-green/80 disabled:opacity-50 text-neo-black border-2 sm:border-4 border-neo-black flex items-center justify-center transition-all cursor-pointer shadow-neo-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
                 >
-                  <Send className="w-5 h-5" />
+                  <Send className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] text-neo-black fill-neo-black" />
                 </button>
               </div>
             </div>
@@ -794,124 +838,122 @@ function JoinScreen({ nickname, setNickname, roomCode, setRoomCode, onJoin, user
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="min-h-screen bg-surface-page flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      className="min-h-screen bg-neo-yellow flex flex-col items-center justify-center p-6 relative overflow-hidden"
     >
-      {/* Background Glow */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-blurple/10 blur-[120px] rounded-full pointer-events-none" />
-
-      <div className="z-10 text-center mb-10">
-        <h1 className="font-headline font-extrabold text-[56px] leading-tight text-snow tracking-[-0.56px] uppercase mb-2">
+      <div className="z-10 text-center mb-8 sm:mb-12">
+        <h1 className="font-headline font-black text-[48px] sm:text-[80px] leading-none text-neo-black tracking-[-0.05em] uppercase mb-4 italic transform -rotate-1 drop-shadow-neo">
           DEEPTALK
         </h1>
-        <p className="font-sans text-fog text-base tracking-[0.013em]">
-          ruang jujur, hanya untuk kalian berdua
+        <p className="font-sans font-black bg-neo-pink text-neo-black px-3 py-1.5 sm:px-4 sm:py-2 border-2 sm:border-4 border-neo-black shadow-neo-sm transform rotate-1 uppercase text-sm sm:text-lg inline-block">
+          ruang jujur untuk kalian berdua
         </p>
       </div>
 
-      <div className="w-full max-w-[400px] bg-not-quite-black p-10 rounded-[24px] shadow-2xl z-10">
-        <div className="space-y-6">
+      <div className="w-full max-w-[460px] bg-neo-white border-4 sm:border-8 border-neo-black p-6 sm:p-10 shadow-neo-lg z-10">
+        <div className="space-y-6 sm:space-y-8">
           {authError && (
-            <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-xl">
-              <p className="text-red-400 text-xs text-center font-medium">
-                ⚠️ {authError}
+            <div className="bg-red-400 border-2 sm:border-4 border-neo-black p-3 sm:p-4 shadow-neo-sm flex items-center gap-2 sm:gap-3">
+              <span className="text-xl sm:text-2xl">⚠️</span>
+              <p className="text-neo-black font-black uppercase text-xs sm:text-sm italic">
+                {authError}
               </p>
             </div>
           )}
 
           {user ? (
-            <div className="bg-blurple/10 border border-blurple/20 p-3 rounded-xl flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-blurple flex items-center justify-center text-snow text-[10px] font-bold">
+            <div className="bg-neo-green border-2 sm:border-4 border-neo-black p-3 sm:p-4 shadow-neo-sm flex items-center gap-3 sm:gap-4">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 border-2 sm:border-4 border-neo-black bg-neo-yellow flex items-center justify-center text-neo-black font-black text-base sm:text-lg">
                 {(user.displayName?.[0] || 'U').toUpperCase()}
               </div>
               <div className="text-left overflow-hidden">
-                <p className="text-snow text-[10px] font-bold truncate uppercase tracking-widest opacity-60">Terhubung</p>
-                <p className="text-fog text-[11px] truncate font-medium">{user.displayName || user.email || "User Anonim"}</p>
+                <p className="text-neo-black font-black text-[10px] sm:text-xs uppercase italic opacity-60 leading-none mb-1">Terhubung Sebagai</p>
+                <p className="text-neo-black text-sm sm:text-lg font-black truncate leading-none uppercase">{user.displayName || user.email || "User Anonim"}</p>
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-4 sm:space-y-6">
               <button 
                 onClick={handleGoogleLogin}
                 disabled={isLoggingIn}
-                className="w-full bg-snow text-not-quite-black hover:bg-snow/90 font-bold py-3 rounded-xl flex items-center justify-center gap-3 transition-all cursor-pointer shadow-xl"
+                className="w-full bg-neo-cyan text-neo-black border-2 sm:border-4 border-neo-black font-black py-3 sm:py-4 flex items-center justify-center gap-3 sm:gap-4 transition-all cursor-pointer shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
               >
-                {isLoggingIn ? "Menghubungkan..." : (
+                {isLoggingIn ? <span className="uppercase text-lg sm:text-xl italic font-black">Menghubungkan...</span> : (
                   <>
-                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <svg className="w-6 h-6 sm:w-8 sm:h-8" viewBox="0 0 24 24">
                       <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                      <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                      <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                      <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                     </svg>
-                    Masuk dengan Google
+                    <span className="uppercase text-lg sm:text-xl italic font-black">Masuk Google</span>
                   </>
                 )}
               </button>
-              <div className="flex items-center gap-3 my-2">
-                <div className="h-px flex-1 bg-dim-grey"></div>
-                <span className="text-fog text-[10px] font-bold uppercase tracking-widest opacity-50">Atau tetap anonim</span>
-                <div className="h-px flex-1 bg-dim-grey"></div>
+              <div className="flex items-center gap-4 sm:gap-6 my-1">
+                <div className="h-1.5 flex-1 bg-neo-black"></div>
+                <span className="text-neo-black font-black uppercase text-base sm:text-lg italic">ATAU</span>
+                <div className="h-1.5 flex-1 bg-neo-black"></div>
               </div>
             </div>
           )}
 
-          <div className="space-y-6">
+          <div className="space-y-4 sm:space-y-6">
             <div className="relative">
-              <label className="block text-[10px] font-bold text-fog uppercase tracking-[0.1em] mb-2 px-1">
-                Nickname
+              <label className="block text-xs sm:text-sm font-black text-neo-black uppercase italic mb-2 px-1">
+                Nickname Kamu
               </label>
               <div className="relative">
                 <input 
                   type="text" 
                   value={nickname}
                   onChange={(e) => setNickname(e.target.value)}
-                  placeholder="Panggilanku..."
-                  className="w-full bg-dark-charcoal text-snow rounded-xl p-4 focus:outline-none focus:ring-1 focus:ring-blurple/50 transition-shadow transition-colors"
+                  placeholder="Panggilan kesayangan..."
+                  className="w-full bg-neo-white text-neo-black border-2 sm:border-4 border-neo-black p-3 sm:p-5 focus:outline-none focus:bg-neo-yellow transition-all font-black text-base sm:text-lg placeholder:text-gray-400 shadow-neo-sm focus:shadow-neo"
                 />
                 {user && nickname === "" && (
                   <button 
                     onClick={() => setNickname(user.displayName?.split(' ')[0] || '')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] bg-blurple/20 text-blurple font-bold px-2 py-1 rounded-md hover:bg-blurple/30 cursor-pointer"
+                    className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 text-[10px] sm:text-xs bg-neo-pink text-neo-black font-black px-2 sm:px-3 py-1 sm:py-1.5 border-2 border-neo-black hover:bg-neo-cyan cursor-pointer uppercase italic shadow-neo-sm transform hover:scale-105 transition-all"
                   >
-                    Gunakan Nama Google
+                    Pakai Google
                   </button>
                 )}
               </div>
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] font-bold text-fog uppercase tracking-[0.1em] mb-2 px-1 text-center">
-              Kode Ruangan
+          <div className="relative">
+            <label className="block text-xs sm:text-sm font-black text-neo-black uppercase italic mb-2 px-1 text-center">
+              Kode Ruangan (6-Digit)
             </label>
             <input 
               type="text" 
               value={roomCode}
               onChange={(e) => setRoomCode(e.target.value.toUpperCase().slice(0, 6))}
-              className="w-full bg-dark-charcoal text-snow rounded-xl p-4 text-center text-2xl font-bold tracking-[0.4em] uppercase focus:outline-none focus:ring-1 focus:ring-blurple/50 transition-shadow"
+              className="w-full bg-neo-white text-neo-black border-2 sm:border-4 border-neo-black p-3 sm:p-5 text-center text-3xl sm:text-4xl font-black tracking-[0.2em] uppercase focus:outline-none focus:bg-neo-cyan transition-all shadow-neo-sm focus:shadow-neo"
               maxLength={6}
             />
           </div>
 
-          <div className="space-y-3 pt-2">
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 pt-2 sm:pt-4">
             <button 
               onClick={onJoin}
-              className="w-full bg-blurple hover:bg-dark-blurple disabled:opacity-50 font-headline font-bold text-snow py-4 rounded-xl transition-colors tracking-wide cursor-pointer"
+              className="w-full bg-neo-pink text-neo-black border-2 sm:border-4 border-neo-black font-black py-4 sm:py-5 uppercase text-xl sm:text-2xl shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none italic"
             >
-              Masuk Ruangan
+              Masuk Sekarang!
             </button>
             <button 
               onClick={() => setRoomCode(generateCode())}
-              className="w-full bg-transparent border border-snow/20 hover:border-snow/50 font-headline font-bold text-snow py-4 rounded-xl transition-all cursor-pointer"
+              className="w-full bg-neo-yellow text-neo-black border-2 sm:border-4 border-neo-black font-black py-3 sm:py-4 uppercase text-base sm:text-lg shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none italic"
             >
-              Buat Kode Baru
+              Acak Kode Baru
             </button>
           </div>
 
-          <div className="bg-blurple/15 p-3 rounded-xl flex items-center justify-center gap-2 border border-blurple/10">
-            <span className="text-fog text-xs leading-relaxed text-center">
-              💬 <span className="opacity-80">Pesan otomatis terhapus dalam 2 jam</span>
-            </span>
+          <div className="bg-neo-black p-3 sm:p-4 shadow-neo-sm -rotate-1 border-2 sm:border-4 border-neo-black">
+            <p className="text-neo-white text-[10px] sm:text-sm font-black italic text-center uppercase tracking-wider">
+              🛑 Pesan Otomatis Meledak dalam 2 Jam 🛑
+            </p>
           </div>
         </div>
       </div>
@@ -1014,170 +1056,165 @@ function MusicPanel({
       animate={{ y: 0 }}
       exit={{ y: "100%" }}
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
-      className="absolute bottom-0 left-0 right-0 h-[92vh] bg-not-quite-black rounded-t-[24px] border-t border-dim-grey shadow-2xl z-20 flex flex-col"
+      className="absolute bottom-0 left-0 right-0 h-[95vh] bg-neo-yellow rounded-none border-t-8 border-neo-black shadow-2xl z-20 flex flex-col p-4 sm:p-8"
     >
-      <div className="p-6 flex flex-col h-full">
+      <div className="bg-neo-white border-4 sm:border-8 border-neo-black h-full flex flex-col p-4 sm:p-6 shadow-neo-lg relative overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-6 sm:mb-8 border-b-4 sm:border-b-8 border-neo-black pb-4 sm:pb-6">
           <div className="flex flex-col">
-            <h2 className="font-headline font-extrabold text-xl text-snow tracking-wide flex items-center gap-2">
-              RADIO MALAM 🌙
+            <h2 className="font-headline font-black text-2xl sm:text-4xl text-neo-black uppercase italic transform -rotate-1 drop-shadow-neo-sm">
+              RADIO NEON 📻
             </h2>
-            <span className="text-[10px] text-fog font-medium uppercase tracking-[0.2em] mt-1">Sesuaikan Urutan Playlist</span>
+            <span className="text-[10px] sm:text-xs bg-neo-cyan text-neo-black font-black uppercase italic px-2 py-1 border-2 border-neo-black inline-block w-fit mt-1 sm:mt-2 shadow-neo-sm">
+              On-Air Control Panel
+            </span>
           </div>
           <button 
             onClick={onClose}
-            className="p-2 text-fog hover:text-snow cursor-pointer"
+            className="w-10 h-10 sm:w-16 sm:h-16 bg-neo-pink border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
           >
-            <ChevronDown className="w-6 h-6" />
+            <ChevronDown className="w-6 h-6 sm:w-10 sm:h-10 stroke-[3px] sm:stroke-[4px]" />
           </button>
         </div>
 
-        {/* Now Playing Section */}
-        <div className="bg-dark-charcoal p-6 rounded-2xl mb-6">
-          {/* Announcer Controls */}
-          {isHost && (
-            <div className="flex items-center gap-2 mb-6 border-b border-dim-grey/30 pb-4">
-              <div className="flex-1">
-                <p className="text-[10px] font-bold text-blurple uppercase tracking-widest mb-2">Panel Penyiar 🎙️</p>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => handleTriggerEffect('opening')}
-                    disabled={isEffectPlaying}
-                    className="flex-1 bg-blurple/10 hover:bg-blurple/20 text-blurple text-[10px] font-bold py-2 px-3 rounded-lg border border-blurple/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Radio className="w-3 h-3" /> OPENING
-                  </button>
-                  <button 
-                    onClick={() => handleTriggerEffect('closing')}
-                    disabled={isEffectPlaying}
-                    className="flex-1 bg-spring-green/10 hover:bg-spring-green/20 text-spring-green text-[10px] font-bold py-2 px-3 rounded-lg border border-spring-green/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <Radio className="w-3 h-3" /> CLOSING
-                  </button>
+        <div className="flex-1 overflow-y-auto pr-2 sm:pr-4 scrollbar-hide py-2 sm:py-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-10 h-full">
+            {/* Left side: Now Playing */}
+            <div className="space-y-6 sm:space-y-8">
+              <div className="bg-neo-cyan border-4 sm:border-8 border-neo-black p-5 sm:p-8 shadow-neo relative overflow-hidden">
+                {/* Visualizer Background */}
+                <div className="absolute inset-0 opacity-10 flex items-center justify-center pointer-events-none">
+                   <div className="w-full h-full bg-[radial-gradient(circle,black_1px,transparent_1px)] bg-[size:20px_20px]"></div>
                 </div>
-              </div>
-            </div>
-          )}
 
-          <div className="flex items-center justify-between mb-2">
-            <div className="pr-4 overflow-hidden text-left">
-              <h3 className="text-snow font-medium text-lg truncate">{currentTrack.title}</h3>
-              <p className="text-fog text-sm truncate">{currentTrack.artist}</p>
-            </div>
-            {/* Equalizer */}
-            <div className="flex items-end gap-1 h-6 shrink-0">
-              {[0, 1, 2, 3].map((i) => (
-                <div 
-                  key={i} 
-                  className={`w-1.5 bg-blurple rounded-full transition-all ${isPlaying ? 'animate-eq' : ''}`}
-                  style={{ 
-                    animationDelay: `${i * 0.1}s`,
-                    height: isPlaying ? undefined : '4px'
-                  }}
-                />
-              ))}
-            </div>
-          </div>
+                {isHost && (
+                  <div className="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
+                    <button 
+                      onClick={() => handleTriggerEffect('opening')}
+                      disabled={isEffectPlaying}
+                      className="flex-1 bg-neo-yellow border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-sm sm:text-base"
+                    >
+                      Intro
+                    </button>
+                    <button 
+                      onClick={() => handleTriggerEffect('closing')}
+                      disabled={isEffectPlaying}
+                      className="flex-1 bg-neo-pink border-2 sm:border-4 border-neo-black shadow-neo-sm font-black py-3 sm:py-4 uppercase italic hover:bg-neo-green transition-all text-sm sm:text-base"
+                    >
+                      Outro
+                    </button>
+                  </div>
+                )}
 
-          <div className="space-y-4 pt-4">
-            <div className="relative h-1 bg-dim-grey rounded-full overflow-hidden">
-              <div 
-                className="absolute left-0 top-0 h-full bg-blurple transition-all duration-300" 
-                style={{ width: `${(progress / (currentTrack.totalSeconds || 1)) * 100}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[11px] font-mono text-fog">
-              <span>{formatTime(progress)}</span>
-              <span>{currentTrack.duration}</span>
-            </div>
-          </div>
+                <div className="text-left relative z-10">
+                  <h3 className="text-neo-black font-black text-2xl sm:text-4xl uppercase italic leading-none mb-1 sm:mb-2 drop-shadow-neo-sm">
+                    {currentTrack.title}
+                  </h3>
+                  <p className="text-neo-black font-black text-base sm:text-xl italic opacity-80 uppercase tracking-tighter">
+                    {currentTrack.artist}
+                  </p>
+                </div>
 
-          {/* Controls */}
-          <div className="flex items-center justify-center gap-8 mt-6">
-            <button 
-              onClick={() => onTrackChange((currentTrackIndex - 1 + playlist.length) % playlist.length)}
-              className="p-2 text-snow hover:text-blurple transition-colors cursor-pointer"
-            >
-              <SkipBack className="w-8 h-8" />
-            </button>
-            <button 
-              onClick={onTogglePlay}
-              className="w-16 h-16 bg-blurple rounded-full flex items-center justify-center text-snow hover:bg-dark-blurple hover:scale-105 transition-all shadow-lg cursor-pointer"
-            >
-              {isPlaying ? <Pause className="w-8 h-8 fill-current" /> : <Play className="w-8 h-8 fill-current translate-x-0.5" />}
-            </button>
-            <button 
-              onClick={() => onTrackChange((currentTrackIndex + 1) % playlist.length)}
-              className="p-2 text-snow hover:text-blurple transition-colors cursor-pointer"
-            >
-              <SkipForward className="w-8 h-8" />
-            </button>
-          </div>
-
-          {/* Volume */}
-          <div className="flex items-center gap-4 mt-8 px-4">
-            <Volume2 className="w-5 h-5 text-fog " />
-            <input 
-              type="range"
-              min="0"
-              max="100"
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-              className="w-full accent-blurple"
-            />
-          </div>
-        </div>
-
-        {/* Playlist */}
-        <div className="flex-1 overflow-y-auto scrollbar-hide">
-          <h4 className="text-[10px] font-bold text-fog uppercase tracking-widest mb-4 px-2">Antrian Lagu</h4>
-          <div className="space-y-1 pb-10">
-            {playlist.map((track, index) => (
-              <div 
-                key={index}
-                className={`flex items-center justify-between p-3 rounded-xl transition-colors group ${
-                  index === currentTrackIndex 
-                    ? 'bg-blurple/10 border-l-[3px] border-blurple' 
-                    : 'hover:bg-dark-charcoal active:bg-dark-charcoal/80'
-                }`}
-              >
-                <div 
-                  className="flex items-center gap-4 overflow-hidden flex-1 cursor-pointer"
-                  onClick={() => onTrackChange(index)}
-                >
-                  <span className={`text-xs font-mono w-4 shrink-0 ${index === currentTrackIndex ? 'text-blurple' : 'text-fog group-hover:text-snow'}`}>
-                    {index + 1}
-                  </span>
-                  <div className="overflow-hidden text-left">
-                    <p className={`text-sm font-medium truncate ${index === currentTrackIndex ? 'text-snow' : 'text-snow/80 group-hover:text-snow'}`}>
-                      {track.title}
-                    </p>
-                    <p className="text-xs text-fog truncate">{track.artist}</p>
+                <div className="mt-8 sm:mt-10 space-y-3 sm:space-y-4 relative z-10">
+                  <div className="h-6 sm:h-10 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm p-0.5 sm:p-1">
+                    <div 
+                      className="h-full bg-neo-black transition-all duration-300" 
+                      style={{ width: `${(progress / (currentTrack.totalSeconds || 1)) * 100}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between font-black font-mono text-base sm:text-xl uppercase italic">
+                    <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:py-1">{formatTime(progress)}</span>
+                    <span className="bg-neo-black text-neo-white px-2 py-0.5 sm:py-1">{currentTrack.duration}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0 ml-2">
-                  <div className="flex flex-col gap-0.5">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleReorder(index, 'up'); }}
-                      disabled={index === 0}
-                      className="p-1 text-fog hover:text-snow disabled:opacity-0 transition-opacity cursor-pointer"
-                    >
-                      <ChevronDown className="w-4 h-4 rotate-180" />
-                    </button>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleReorder(index, 'down'); }}
-                      disabled={index === playlist.length - 1}
-                      className="p-1 text-fog hover:text-snow disabled:opacity-0 transition-opacity cursor-pointer"
-                    >
-                      <ChevronDown className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <span className="text-xs text-fog font-mono ml-1">{track.duration}</span>
+                <div className="flex items-center justify-center gap-6 sm:gap-10 mt-8 sm:mt-10">
+                  <button 
+                    onClick={() => onTrackChange((currentTrackIndex - 1 + playlist.length) % playlist.length)}
+                    className="w-12 h-12 sm:w-16 sm:h-16 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+                  >
+                    <SkipBack className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
+                  </button>
+                  <button 
+                    onClick={onTogglePlay}
+                    className="w-16 h-16 sm:w-24 sm:h-24 bg-neo-pink border-4 border-neo-black shadow-neo flex items-center justify-center text-neo-black hover:bg-neo-green hover:scale-105 transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+                  >
+                    {isPlaying ? <Pause className="w-8 h-8 sm:w-12 sm:h-12 stroke-[3px] sm:stroke-[4px] fill-neo-black" /> : <Play className="w-8 h-8 sm:w-12 sm:h-12 stroke-[3px] sm:stroke-[4px] fill-neo-black translate-x-1" />}
+                  </button>
+                  <button 
+                    onClick={() => onTrackChange((currentTrackIndex + 1) % playlist.length)}
+                    className="w-12 h-12 sm:w-16 sm:h-16 bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm flex items-center justify-center hover:bg-neo-yellow cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+                  >
+                    <SkipForward className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
+                  </button>
+                </div>
+
+                <div className="mt-8 sm:mt-10 flex items-center gap-4 sm:gap-6 bg-neo-white border-2 sm:border-4 border-neo-black p-3 sm:p-4 shadow-neo-sm">
+                  <Volume2 className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px] sm:stroke-[4px]" />
+                  <input 
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={volume}
+                    onChange={(e) => setVolume(Number(e.target.value))}
+                    className="flex-1 accent-neo-black border-none h-4"
+                  />
+                  <span className="font-black font-mono text-base sm:text-xl w-10 sm:w-12">{volume}%</span>
                 </div>
               </div>
-            ))}
+            </div>
+
+            {/* Right side: Playlist */}
+            <div className="flex flex-col h-full mt-4 lg:mt-0">
+              <h4 className="font-black uppercase text-xl sm:text-2xl mb-4 sm:mb-6 italic transform -rotate-1 inline-block bg-neo-green px-3 py-1.5 sm:px-4 sm:py-2 border-2 sm:border-4 border-neo-black shadow-neo-sm w-fit">
+                Antrian Radio
+              </h4>
+              <div className="flex-1 space-y-3 sm:space-y-4 overflow-y-auto pr-2 sm:pr-4 scrollbar-hide">
+                {playlist.map((track, index) => (
+                  <div 
+                    key={index}
+                    className={`flex items-center gap-4 sm:gap-6 p-3 sm:p-4 border-2 sm:border-4 border-neo-black shadow-neo-sm transition-all group ${
+                      index === currentTrackIndex 
+                        ? 'bg-neo-yellow scale-[1.01] shadow-neo' 
+                        : 'bg-neo-white hover:bg-neo-cyan/20'
+                    }`}
+                  >
+                    <span className="font-black text-xl sm:text-2xl italic font-mono w-6 sm:w-8 shrink-0 border-r-2 sm:border-r-4 border-neo-black mr-1 sm:mr-2">
+                      {index + 1}
+                    </span>
+                    <div 
+                      className="flex-1 cursor-pointer overflow-hidden"
+                      onClick={() => onTrackChange(index)}
+                    >
+                      <h5 className="font-black text-lg sm:text-xl leading-none uppercase truncate mb-0.5 sm:mb-1">
+                        {track.title}
+                      </h5>
+                      <p className="font-bold text-[10px] sm:text-sm uppercase italic opacity-70 truncate">{track.artist}</p>
+                    </div>
+                    {isHost ? (
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleReorder(index, 'up'); }}
+                          disabled={index === 0}
+                          className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-pink disabled:opacity-0 active:translate-y-[-2px]"
+                        >
+                          <ChevronDown className="w-5 h-5 sm:w-6 sm:h-6 rotate-180 stroke-[3px]" />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleReorder(index, 'down'); }}
+                          disabled={index === playlist.length - 1}
+                          className="w-8 h-8 sm:w-10 sm:h-10 border-2 border-neo-black flex items-center justify-center bg-neo-white hover:bg-neo-cyan disabled:opacity-0 active:translate-y-[2px]"
+                        >
+                          <ChevronDown className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
+                        </button>
+                      </div>
+                    ) : (
+                       <span className="font-black font-mono text-xs sm:text-sm uppercase italic">{track.duration}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1187,68 +1224,68 @@ function MusicPanel({
 
 function SecurityModal({ onClose }: any) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-neo-black/80 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0"
       />
       <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.9, opacity: 0 }}
-        className="w-full max-w-[360px] bg-not-quite-black rounded-[24px] p-8 shadow-2xl relative z-10 border border-dim-grey"
+        initial={{ scale: 0.9, y: 20, rotate: -2 }}
+        animate={{ scale: 1, y: 0, rotate: 0 }}
+        exit={{ scale: 0.9, y: 20, rotate: 2 }}
+        className="w-full max-w-[460px] bg-neo-white border-8 border-neo-black p-10 shadow-neo-lg relative z-10"
       >
         <button 
           onClick={onClose}
-          className="absolute top-6 right-6 text-fog hover:text-snow cursor-pointer"
+          className="absolute -top-6 -right-6 w-16 h-16 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:scale-95"
         >
-          <X className="w-5 h-5" />
+          <X className="w-10 h-10 stroke-[4px]" />
         </button>
         
-        <h2 className="font-headline font-extrabold text-2xl text-snow tracking-tight uppercase mb-8 pr-8">
-          KEAMANAN SESI
+        <h2 className="font-headline font-black text-5xl text-neo-black tracking-tight uppercase mb-10 italic leading-none transform -rotate-1 drop-shadow-neo-sm">
+          SANGAT AMAN! 🔒
         </h2>
 
-        <div className="space-y-8 mb-10">
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 shrink-0 bg-blurple/10 rounded-xl flex items-center justify-center text-blurple">
-              <ShieldCheck className="w-6 h-6" />
+        <div className="space-y-8 mb-12">
+          <div className="flex items-start gap-6 bg-neo-cyan border-4 border-neo-black p-5 shadow-neo-sm">
+            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black">
+              <ShieldCheck className="w-8 h-8 stroke-[3px]" />
             </div>
             <div>
-              <p className="text-snow text-sm font-medium mb-1">Pesan Terproteksi</p>
-              <p className="text-fog text-xs leading-relaxed">Pesan tidak tersimpan di server manapun & hanyalah sementara.</p>
+              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Terproteksi</p>
+              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">Hanya kalian berdua yang bisa membaca. Tidak ada riwayat di server.</p>
             </div>
           </div>
 
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 shrink-0 bg-blurple/10 rounded-xl flex items-center justify-center text-blurple">
-              <Info className="w-6 h-6" />
+          <div className="flex items-start gap-6 bg-neo-yellow border-4 border-neo-black p-5 shadow-neo-sm">
+            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black text-3xl">
+               ⏳
             </div>
             <div>
-              <p className="text-snow text-sm font-medium mb-1">Auto-Penghapusan</p>
-              <p className="text-fog text-xs leading-relaxed">Semua data terhapus otomatis setelah 2 jam atau saat sesi ditutup.</p>
+              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Mekanisme Bom</p>
+              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">Pesan meledak sendiri dalam 2 jam. Tidak akan ada bukti nantinya.</p>
             </div>
           </div>
 
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 shrink-0 bg-blurple/10 rounded-xl flex items-center justify-center text-blurple">
-              <Lock className="w-6 h-6" />
+          <div className="flex items-start gap-6 bg-neo-green border-4 border-neo-black p-5 shadow-neo-sm">
+            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black">
+              <Lock className="w-8 h-8 stroke-[3px]" />
             </div>
             <div>
-              <p className="text-snow text-sm font-medium mb-1">Akses Terbatas</p>
-              <p className="text-fog text-xs leading-relaxed">Kode ruangan adalah satu-satunya akses. Pastikan kodenya hanya untuk kalian.</p>
+              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Gerbang Rapat</p>
+              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">ID Ruangan adalah kuncinya. Pastikan kalian saja yang memilikinya.</p>
             </div>
           </div>
         </div>
 
         <button 
           onClick={onClose}
-          className="w-full bg-blurple hover:bg-dark-blurple font-headline font-bold text-snow py-4 rounded-xl transition-colors cursor-pointer"
+          className="w-full bg-neo-pink text-neo-black border-4 border-neo-black font-black py-6 uppercase text-3xl shadow-neo hover:translate-x-[-4px] hover:translate-y-[-4px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[4px] active:translate-y-[4px] active:shadow-none italic"
         >
-          Selesai
+          PAHAM BOSS!
         </button>
       </motion.div>
     </div>
