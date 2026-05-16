@@ -83,10 +83,10 @@ const PLAYLIST: Track[] = [
     title: "Bayangkan", 
     artist: "Hindia", 
     duration: "4:00", 
-    totalSeconds: 240,
+    totalSeconds: 2,
     audioUrl: "/audio/Bayangkan_spotdown.org.mp3" 
   },
-  { 
+  {
     title: "Firasat", 
     artist: "Marcell", 
     duration: "4:00", 
@@ -482,7 +482,7 @@ export default function App() {
         // Create initial music state
         await setDoc(doc(db, `rooms/${roomCode}/music/current`), {
           currentTrackIndex: 0,
-          isPlaying: false,
+          isPlaying: true,
           progress: 0,
           updatedAt: serverTimestamp()
         });
