@@ -28,7 +28,6 @@ service cloud.firestore {
 
     function isValidRoom(data) {
       return data.keys().hasAll(['createdAt', 'expiresAt']) 
-        && data.keys().size() == 2
         && data.createdAt == request.time
         && data.expiresAt is timestamp;
     }
@@ -53,7 +52,6 @@ service cloud.firestore {
 
     function isValidMusicState(data) {
       return data.keys().hasAll(['currentTrackIndex', 'isPlaying', 'progress', 'updatedAt'])
-        && data.keys().size() == 4
         && data.currentTrackIndex is int 
         && data.isPlaying is bool
         && data.progress is int && data.progress >= 0
@@ -81,21 +79,31 @@ service cloud.firestore {
       match /presence/{userId} {
         allow list: if isSignedIn();
         allow get: if isSignedIn() && isValidId(userId);
-        allow write: if isSignedIn() 
+        allow create, update: if isSignedIn() 
           && userId == request.auth.uid 
           && isValidId(userId) 
           && isValidPresence(incoming());
+        allow delete: if isSignedIn() && userId == request.auth.uid;
       }
 
       // Music state (single document per room)
       match /music/current {
         allow get: if isSignedIn();
-        allow write: if isSignedIn() && isValidMusicState(incoming());
+        allow write: if isSignedIn() 
+          && exists(/databases/$(database)/documents/rooms/$(roomCode))
+          && isValidMusicState(incoming());
       }
 
       match /music/playlist {
         allow get: if isSignedIn();
-        allow write: if isSignedIn();
+        allow write: if isSignedIn()
+          && exists(/databases/$(database)/documents/rooms/$(roomCode));
+      }
+
+      match /music/effects {
+        allow get: if isSignedIn();
+        allow write: if isSignedIn()
+          && exists(/databases/$(database)/documents/rooms/$(roomCode));
       }
     }
   }
