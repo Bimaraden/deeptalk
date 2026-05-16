@@ -33,12 +33,19 @@ export const googleProvider = new GoogleAuthProvider();
 const rawConfig = firebaseConfig as any;
 const databaseId = rawConfig.firestoreDatabaseId || rawConfig.default?.firestoreDatabaseId;
 
+// Debugging for local users who might have config issues
+if (typeof window !== 'undefined') {
+  (window as any)._firebaseConfig = rawConfig;
+}
+
 if (!databaseId) {
-  console.warn('Firebase config debug - Keys:', Object.keys(rawConfig));
+  const keys = Object.keys(rawConfig);
+  console.warn('Firebase config debug - Keys:', keys);
   if (rawConfig.default) {
     console.warn('Firebase config default keys:', Object.keys(rawConfig.default));
   }
-  console.warn('firestoreDatabaseId not found in config. Falling back to (default)');
+  console.error('CRITICAL: firestoreDatabaseId NOT found in firebase-applet-config.json');
+  console.warn('Falling back to (default), which will likely fail in AI Studio environments.');
 } else {
   console.log('Initializing Firestore with databaseId:', databaseId);
 }
