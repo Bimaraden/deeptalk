@@ -6,9 +6,30 @@
       "type": "object",
       "properties": {
         "createdAt": { "type": "string", "format": "date-time" },
-        "expiresAt": { "type": "string", "format": "date-time" }
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "legacySettings": {
+          "type": "object",
+          "properties": {
+             "isEnabled": { "type": "boolean" },
+             "ownerId": { "type": "string" },
+             "personaPrompt": { "type": "string" }
+          }
+        }
       },
       "required": ["createdAt", "expiresAt"]
+    },
+    "GalleryItem": {
+      "title": "GalleryItem",
+      "description": "A shared memory in the gallery",
+      "type": "object",
+      "properties": {
+        "imageUrl": { "type": "string" },
+        "caption": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "nickname": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["imageUrl", "uploadedBy", "timestamp"]
     },
     "Message": {
       "title": "Message",
@@ -63,6 +84,10 @@
     "rooms/{roomCode}/music/current": {
       "schema": "MusicState",
       "description": "Global music state for the room"
+    },
+    "rooms/{roomCode}/gallery/{itemId}": {
+      "schema": "GalleryItem",
+      "description": "Shared photos/memories"
     }
   }
 }

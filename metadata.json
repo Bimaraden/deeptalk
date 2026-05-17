@@ -1,6 +1,6 @@
 {
   "name": "DeepTalk",
-  "description": "A private, ephemeral chat room for two with a built-in shared music radio, inspired by Discord design.",
+  "description": "DeepTalk: Ruang intim untuk berdua dengan radio musik bersama, galeri kenangan, dan AI Persona (Lestari) untuk tetap terhubung melampaui waktu.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

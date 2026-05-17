@@ -20,7 +20,10 @@ import {
   ShieldCheck,
   X,
   Radio,
-  Trash2
+  Trash2,
+  Image as ImageIcon,
+  Camera,
+  Heart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -199,6 +202,12 @@ export default function App() {
   
   // Modals
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [legacySettings, setLegacySettings] = useState<{isEnabled: boolean, ownerId: string, personaPrompt: string}>({
+    isEnabled: false,
+    ownerId: '',
+    personaPrompt: ''
+  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -481,6 +490,9 @@ export default function App() {
       if (snapshot.exists()) {
         const data = snapshot.data();
         setRoomHostId(data.hostId);
+        if (data.legacySettings) {
+          setLegacySettings(data.legacySettings);
+        }
         const expiresAt = (data.expiresAt as Timestamp).toDate();
         const now = new Date();
         const diff = Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000));
@@ -589,6 +601,42 @@ export default function App() {
     }
   };
 
+  const triggerLegacyAI = async (lastUserText: string) => {
+    // Small delay to simulate thinking
+    setTimeout(async () => {
+      try {
+        // Construct simple context from last few messages
+        const chatHistory = messages.slice(-6).map(m => ({
+          role: m.sender === 'me' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        }));
+
+        // Add the current message if not yet in chatHistory
+        if (!chatHistory.some(h => h.parts[0].text === lastUserText)) {
+          chatHistory.push({ role: 'user', parts: [{ text: lastUserText }] });
+        }
+
+        const response = await axios.post('/api/chat/legacy', {
+          messages: chatHistory,
+          personaPrompt: legacySettings.personaPrompt,
+          partnerNickname: 'Pasanganmu' // Fallback
+        });
+
+        if (response.data.text) {
+          await addDoc(collection(db, `rooms/${roomCode}/messages`), {
+            senderId: 'legacy-ai',
+            nickname: 'AI Persona',
+            text: response.data.text,
+            timestamp: serverTimestamp(),
+            type: 'chat'
+          });
+        }
+      } catch (err) {
+        console.error("Legacy AI Error:", err);
+      }
+    }, 2000);
+  };
+
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || !user) return;
     
@@ -603,6 +651,12 @@ export default function App() {
         timestamp: serverTimestamp(),
         type: 'chat'
       });
+
+      // Trigger Legacy AI if partner is offline and legacy mode is enabled by the "absent" person
+      // For this prototype, we'll trigger it if enabled and current user is NOT the persona owner
+      if (!partnerPresence && legacySettings.isEnabled && legacySettings.ownerId !== user.uid) {
+        triggerLegacyAI(text);
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `rooms/${roomCode}/messages`);
     }
@@ -721,6 +775,13 @@ export default function App() {
               </div>
 
               <div className="flex gap-2 sm:gap-3">
+                <button 
+                  onClick={() => setIsGalleryOpen(true)}
+                  title="Galeri"
+                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-green border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                >
+                  <ImageIcon className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
+                </button>
                 <button 
                   onClick={() => setIsMusicPanelOpen(true)}
                   title="Musik"
@@ -889,7 +950,24 @@ export default function App() {
             {/* Security Modal */}
             <AnimatePresence>
               {isSecurityModalOpen && (
-                <SecurityModal onClose={() => setIsSecurityModalOpen(false)} />
+                <SecurityModal 
+                  onClose={() => setIsSecurityModalOpen(false)} 
+                  legacySettings={legacySettings}
+                  roomCode={roomCode}
+                  user={user}
+                />
+              )}
+            </AnimatePresence>
+
+            {/* Gallery Panel */}
+            <AnimatePresence>
+              {isGalleryOpen && (
+                <GalleryPanel 
+                  onClose={() => setIsGalleryOpen(false)} 
+                  roomCode={roomCode}
+                  user={user}
+                  nickname={nickname}
+                />
               )}
             </AnimatePresence>
           </div>
@@ -1390,9 +1468,49 @@ function MusicPanel({
   );
 }
 
-function SecurityModal({ onClose }: any) {
+function SecurityModal({ onClose, legacySettings, roomCode, user }: any) {
+  const [activeTab, setActiveTab] = useState<'safety' | 'legacy'>('safety');
+  const [localPrompt, setLocalPrompt] = useState(legacySettings.personaPrompt || '');
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  const handleToggleLegacy = async () => {
+    setIsUpdating(true);
+    try {
+      await updateDoc(doc(db, `rooms/${roomCode}`), {
+        legacySettings: {
+          ...legacySettings,
+          isEnabled: !legacySettings.isEnabled,
+          ownerId: user.uid,
+          personaPrompt: legacySettings.personaPrompt || 'Seorang pasangan yang penuh kasih sayang.'
+        }
+      });
+    } catch (err) {
+      console.error("Legacy toggle failed:", err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    setIsUpdating(true);
+    try {
+      await updateDoc(doc(db, `rooms/${roomCode}`), {
+        legacySettings: {
+          ...legacySettings,
+          ownerId: user.uid,
+          personaPrompt: localPrompt
+        }
+      });
+      alert("Personamu telah disimpan! ✨");
+    } catch (err) {
+      console.error("Legacy prompt save failed:", err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-neo-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-neo-black/80 backdrop-blur-sm">
       <motion.div 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -1404,58 +1522,295 @@ function SecurityModal({ onClose }: any) {
         initial={{ scale: 0.9, y: 20, rotate: -2 }}
         animate={{ scale: 1, y: 0, rotate: 0 }}
         exit={{ scale: 0.9, y: 20, rotate: 2 }}
-        className="w-full max-w-[460px] bg-neo-white border-8 border-neo-black p-10 shadow-neo-lg relative z-10"
+        className="w-full max-w-[500px] bg-neo-white border-4 sm:border-8 border-neo-black shadow-neo-lg relative z-10 flex flex-col max-h-[90vh]"
       >
         <button 
           onClick={onClose}
-          className="absolute -top-6 -right-6 w-16 h-16 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:scale-95"
+          className="absolute -top-4 -right-4 sm:-top-6 sm:-right-6 w-12 h-12 sm:w-16 sm:h-16 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:scale-95"
         >
-          <X className="w-10 h-10 stroke-[4px]" />
+          <X className="w-8 h-8 sm:w-10 sm:h-10 stroke-[4px]" />
         </button>
         
-        <h2 className="font-headline font-black text-5xl text-neo-black tracking-tight uppercase mb-10 italic leading-none transform -rotate-1 drop-shadow-neo-sm">
-          SANGAT AMAN! 🔒
-        </h2>
-
-        <div className="space-y-8 mb-12">
-          <div className="flex items-start gap-6 bg-neo-cyan border-4 border-neo-black p-5 shadow-neo-sm">
-            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black">
-              <ShieldCheck className="w-8 h-8 stroke-[3px]" />
-            </div>
-            <div>
-              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Terproteksi</p>
-              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">Hanya kalian berdua yang bisa membaca. Tidak ada riwayat di server.</p>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-6 bg-neo-yellow border-4 border-neo-black p-5 shadow-neo-sm">
-            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black text-3xl">
-               ⏳
-            </div>
-            <div>
-              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Mekanisme Bom</p>
-              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">Pesan meledak sendiri dalam 2 jam. Tidak akan ada bukti nantinya.</p>
-            </div>
-          </div>
-
-          <div className="flex items-start gap-6 bg-neo-green border-4 border-neo-black p-5 shadow-neo-sm">
-            <div className="w-14 h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black">
-              <Lock className="w-8 h-8 stroke-[3px]" />
-            </div>
-            <div>
-              <p className="text-neo-black text-xl font-black uppercase mb-1 leading-tight">Gerbang Rapat</p>
-              <p className="text-neo-black font-bold text-sm leading-tight opacity-75">ID Ruangan adalah kuncinya. Pastikan kalian saja yang memilikinya.</p>
-            </div>
-          </div>
+        {/* Tabs */}
+        <div className="flex shrink-0">
+          <button 
+            onClick={() => setActiveTab('safety')}
+            className={`flex-1 py-4 font-black uppercase italic border-b-4 border-neo-black transition-all ${activeTab === 'safety' ? 'bg-neo-yellow' : 'bg-neo-white opacity-40 hover:opacity-100'}`}
+          >
+            KEAMANAN
+          </button>
+          <button 
+            onClick={() => setActiveTab('legacy')}
+            className={`flex-1 py-4 font-black uppercase italic border-b-4 border-neo-black border-l-4 transition-all ${activeTab === 'legacy' ? 'bg-neo-cyan' : 'bg-neo-white opacity-40 hover:opacity-100'}`}
+          >
+            AI PERSONA
+          </button>
         </div>
 
-        <button 
-          onClick={onClose}
-          className="w-full bg-neo-pink text-neo-black border-4 border-neo-black font-black py-6 uppercase text-3xl shadow-neo hover:translate-x-[-4px] hover:translate-y-[-4px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[4px] active:translate-y-[4px] active:shadow-none italic"
-        >
-          PAHAM BOSS!
-        </button>
+        <div className="p-6 sm:p-10 overflow-y-auto">
+          {activeTab === 'safety' ? (
+            <div className="space-y-6 sm:space-y-8">
+              <h2 className="font-headline font-black text-3xl sm:text-5xl text-neo-black tracking-tight uppercase mb-4 italic leading-none transform -rotate-1 drop-shadow-neo-sm">
+                SANGAT AMAN! 🔒
+              </h2>
+
+              <div className="space-y-6">
+                <div className="flex items-start gap-4 sm:gap-6 bg-neo-cyan border-4 border-neo-black p-4 sm:p-5 shadow-neo-sm">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black">
+                    <ShieldCheck className="w-6 h-6 sm:w-8 sm:h-8 stroke-[3px]" />
+                  </div>
+                  <div>
+                    <p className="text-neo-black text-lg sm:text-xl font-black uppercase mb-1 leading-tight">Terproteksi</p>
+                    <p className="text-neo-black font-bold text-xs sm:text-sm leading-tight opacity-75">Hanya kalian berdua yang bisa membaca. Tidak ada riwayat permanen.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-4 sm:gap-6 bg-neo-yellow border-4 border-neo-black p-4 sm:p-5 shadow-neo-sm">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 shrink-0 bg-neo-white border-4 border-neo-black flex items-center justify-center text-neo-black text-2xl">
+                     ⏳
+                  </div>
+                  <div>
+                    <p className="text-neo-black text-lg sm:text-xl font-black uppercase mb-1 leading-tight">Mekanisme Bom</p>
+                    <p className="text-neo-black font-bold text-xs sm:text-sm leading-tight opacity-75">Pesan meledak sendiri dalam 2 jam. Tidak akan ada bukti nantinya.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <h2 className="font-headline font-black text-3xl sm:text-5xl text-neo-black tracking-tight uppercase mb-4 italic leading-none transform -rotate-1 drop-shadow-neo-sm text-neo-cyan">
+                LESTARI ✨
+              </h2>
+              <p className="font-bold text-sm leading-tight opacity-75 italic mb-4">
+                "Jika suatu saat aku tak lagi di sini, biarkan diriku yang lain menemanimu mengobrol."
+              </p>
+
+              <div className={`p-4 border-4 border-neo-black shadow-neo-sm transition-all ${legacySettings.isEnabled ? 'bg-neo-green' : 'bg-neutral-200 opacity-60'}`}>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="font-black uppercase italic text-sm">Mode Kenangan</span>
+                  <button 
+                    onClick={handleToggleLegacy}
+                    disabled={isUpdating}
+                    className={`w-12 h-6 sm:w-14 sm:h-8 border-2 border-neo-black relative transition-all ${legacySettings.isEnabled ? 'bg-neo-black' : 'bg-neo-white'}`}
+                  >
+                    <div className={`absolute top-0.5 w-4 h-4 sm:w-6 sm:h-6 border-2 border-neo-black transition-all ${legacySettings.isEnabled ? 'right-0.5 bg-neo-green' : 'left-0.5 bg-neutral-400'}`}></div>
+                  </button>
+                </div>
+                <p className="text-[10px] sm:text-xs font-bold leading-tight uppercase">
+                  {legacySettings.isEnabled 
+                    ? "AKTIF: AI akan membalas pesan jika kamu offline." 
+                    : "MATI: Pasanganmu tidak bisa mengobrol dengan AI-mu."}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] sm:text-xs font-black uppercase italic mb-1">Ajarkan AI tentang dirimu:</label>
+                <textarea 
+                   value={localPrompt}
+                   onChange={(e) => setLocalPrompt(e.target.value)}
+                   placeholder="Contoh: Aku orangnya humoris, suka panggil dia 'beib', suka bahas kucing..."
+                   className="w-full bg-neo-white border-4 border-neo-black p-4 font-bold text-sm focus:outline-none focus:bg-neo-cyan/10 min-h-[120px] shadow-neo-sm"
+                />
+                <button 
+                  onClick={handleSavePrompt}
+                  disabled={isUpdating}
+                  className="w-full bg-neo-black text-neo-white font-black py-3 uppercase italic hover:bg-neo-cyan hover:text-neo-black transition-all shadow-neo-sm active:translate-y-1 active:shadow-none"
+                >
+                  SIMPAN PERSONA
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 sm:p-8 shrink-0">
+          <button 
+            onClick={onClose}
+            className="w-full bg-neo-pink text-neo-black border-4 border-neo-black font-black py-4 uppercase text-2xl shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none italic"
+          >
+            OKE BOSS!
+          </button>
+        </div>
       </motion.div>
     </div>
+  );
+}
+
+function GalleryPanel({ onClose, roomCode, user, nickname }: any) {
+  const [items, setItems] = useState<any[]>([]);
+  const [isAdding, setIsAdding] = useState(false);
+  const [newUrl, setNewUrl] = useState('');
+  const [newCaption, setNewCaption] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, `rooms/${roomCode}/gallery`),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      setItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return unsub;
+  }, [roomCode]);
+
+  const handleAddPhoto = async () => {
+    if (!newUrl.trim()) return;
+    setIsUploading(true);
+    try {
+      await addDoc(collection(db, `rooms/${roomCode}/gallery`), {
+        imageUrl: newUrl,
+        caption: newCaption,
+        uploadedBy: user.uid,
+        nickname: nickname,
+        timestamp: serverTimestamp()
+      });
+      setNewUrl('');
+      setNewCaption('');
+      setIsAdding(false);
+    } catch (err) {
+      console.error("Gallery add failed:", err);
+      alert("Gagal menambah foto.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleDeleteItem = async (id: string, uploadedBy: string) => {
+    if (uploadedBy !== user.uid) return;
+    if (confirm("Hapus kenangan ini?")) {
+      try {
+        await deleteDoc(doc(db, `rooms/${roomCode}/gallery/${id}`));
+      } catch (err) {
+        console.error("Delete failed:", err);
+      }
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      className="fixed inset-0 sm:inset-y-0 sm:right-0 sm:left-auto sm:w-[500px] bg-neo-yellow z-40 border-l-8 border-neo-black flex flex-col shadow-2xl p-4 sm:p-8"
+    >
+      <div className="flex items-center justify-between mb-8 border-b-8 border-neo-black pb-6">
+        <div className="flex flex-col">
+          <h2 className="font-headline font-black text-4xl text-neo-black uppercase italic transform -rotate-2 drop-shadow-neo-sm leading-none mb-1">
+            KENANGAN 🎞️
+          </h2>
+          <span className="text-[10px] bg-neo-black text-neo-white font-black uppercase italic px-2 py-0.5 border-2 border-neo-black inline-block w-fit">
+            MEMORIES GALLERY
+          </span>
+        </div>
+        <button 
+          onClick={onClose}
+          className="w-12 h-12 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+        >
+          <X className="w-8 h-8 stroke-[4px]" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto pr-2 scrollbar-hide space-y-6 pb-24">
+        {isAdding ? (
+          <div className="bg-neo-white border-4 border-neo-black p-6 shadow-neo space-y-4">
+             <h3 className="font-black uppercase italic text-lg mb-2">Tambah Kenangan Baru</h3>
+             <div className="space-y-4">
+               <div>
+                 <label className="block text-[10px] font-black uppercase italic mb-1">Link URL Foto:</label>
+                 <input 
+                   type="text" 
+                   value={newUrl}
+                   onChange={(e) => setNewUrl(e.target.value)}
+                   placeholder="https://images.unsplash.com/photo-..."
+                   className="w-full bg-neo-white border-4 border-neo-black p-3 font-bold text-sm focus:outline-none focus:bg-neo-cyan/10"
+                 />
+                 <div className="bg-neo-cyan/10 border-l-4 border-neo-cyan p-2 mt-2">
+                   <p className="text-[10px] font-bold uppercase leading-tight italic">
+                     💡 CARA CARI LINK FOTO:
+                     <br/>1. Cari foto di Google/Pinterest
+                     <br/>2. Klik kanan (tahan lama di HP)
+                     <br/>3. Pilih "Salin Alamat Gambar" / "Copy Image Link"
+                   </p>
+                 </div>
+               </div>
+               <div>
+                 <label className="block text-[10px] font-black uppercase italic mb-1">Caption:</label>
+                 <textarea 
+                   value={newCaption}
+                   onChange={(e) => setNewCaption(e.target.value)}
+                   className="w-full bg-neo-white border-4 border-neo-black p-3 font-bold text-sm focus:outline-none focus:bg-neo-cyan/10 min-h-[80px]"
+                 />
+               </div>
+               <div className="flex gap-3 pt-2">
+                 <button 
+                   onClick={handleAddPhoto}
+                   disabled={isUploading || !newUrl}
+                   className="flex-1 bg-neo-green text-neo-black border-4 border-neo-black font-black py-4 uppercase italic shadow-neo-sm active:translate-y-1 active:shadow-none"
+                 >
+                   SIMPAN!
+                 </button>
+                 <button 
+                   onClick={() => setIsAdding(false)}
+                   className="bg-red-400 text-neo-black border-4 border-neo-black font-black px-6 uppercase italic shadow-neo-sm active:translate-y-1 active:shadow-none"
+                 >
+                   BATAL
+                 </button>
+               </div>
+             </div>
+          </div>
+        ) : (
+          <button 
+            onClick={() => setIsAdding(true)}
+            className="w-full bg-neo-white border-4 border-neo-black p-8 shadow-neo border-dashed flex flex-col items-center justify-center gap-3 group hover:bg-neo-cyan/10 transition-all cursor-pointer"
+          >
+            <Camera className="w-12 h-12 stroke-[2px] transition-transform group-hover:scale-110" />
+            <span className="font-black uppercase italic text-xl">Klik untuk nambah Kenangan</span>
+          </button>
+        )}
+
+        <div className="grid grid-cols-1 gap-8 pt-4">
+          {items.map((item) => (
+            <div key={item.id} className="bg-neo-white border-4 border-neo-black p-4 shadow-neo relative group transform rotate-1 hover:rotate-0 transition-transform">
+              <div className="aspect-square bg-neutral-200 border-4 border-neo-black mb-4 overflow-hidden relative">
+                <img 
+                  src={item.imageUrl} 
+                  alt="Memory" 
+                  className="w-full h-full object-cover grayscale-0 group-hover:grayscale-[20%] transition-all"
+                  referrerPolicy="no-referrer"
+                />
+                {item.uploadedBy === user.uid && (
+                  <button 
+                    onClick={() => handleDeleteItem(item.id, item.uploadedBy)}
+                    className="absolute top-2 right-2 w-8 h-8 bg-red-400 border-2 border-neo-black shadow-neo-sm flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <p className="font-black italic text-lg leading-tight uppercase mb-4 text-center">
+                {item.caption || "Kenangan Indah ✨"}
+              </p>
+              <div className="flex items-center justify-between border-t-2 border-neo-black pt-2">
+                <span className="text-[10px] font-black uppercase opacity-40 italic">Oleh: {item.nickname || "Anonim"}</span>
+                <Heart className="w-4 h-4 text-neo-pink fill-neo-pink" />
+              </div>
+              
+              {/* Tape deco */}
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 w-20 h-8 bg-neo-yellow/60 border-x-2 border-neo-black/20 mix-blend-multiply pointer-events-none"></div>
+            </div>
+          ))}
+          
+          {items.length === 0 && !isAdding && (
+            <div className="text-center py-20 opacity-30">
+              <p className="font-black italic uppercase text-lg">Belum ada kenangan... <br/> Yuk abadikan momen pertamamu!</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }

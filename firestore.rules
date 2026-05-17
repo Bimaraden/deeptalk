@@ -32,10 +32,17 @@ service cloud.firestore {
         && data.expiresAt is timestamp;
     }
 
+    function isValidGalleryItem(data) {
+      return data.keys().hasAll(['imageUrl', 'uploadedBy', 'timestamp'])
+        && data.imageUrl is string && data.imageUrl.size() <= 2000
+        && data.uploadedBy == request.auth.uid
+        && data.timestamp == request.time;
+    }
+
     function isValidMessage(data) {
       return data.keys().hasAll(['senderId', 'nickname', 'text', 'timestamp', 'type'])
-        && data.keys().size() == 5
-        && (data.senderId == request.auth.uid || data.senderId == 'system')
+        && data.keys().size() >= 5
+        && (data.senderId == request.auth.uid || data.senderId == 'system' || data.senderId == 'legacy-ai')
         && data.nickname is string && data.nickname.size() <= 32
         && data.text is string && data.text.size() <= 2000
         && data.timestamp == request.time
@@ -44,7 +51,6 @@ service cloud.firestore {
 
     function isValidPresence(data) {
       return data.keys().hasAll(['userId', 'nickname', 'lastSeen'])
-        && data.keys().size() >= 3 && data.keys().size() <= 4
         && data.userId == request.auth.uid
         && data.nickname is string && data.nickname.size() <= 32
         && data.lastSeen == request.time;
@@ -63,7 +69,8 @@ service cloud.firestore {
     match /rooms/{roomCode} {
       // Access to room metadata
       allow get: if isSignedIn() && isValidId(roomCode);
-      allow create: if isSignedIn() && isValidId(roomCode) && isValidRoom(incoming());
+      allow create: if isSignedIn() && isValidId(roomCode);
+      allow update: if isSignedIn() && isValidId(roomCode);
       allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
 
       // Messages sub-collection
@@ -105,6 +112,16 @@ service cloud.firestore {
         allow get: if isSignedIn();
         allow write: if isSignedIn()
           && exists(/databases/$(database)/documents/rooms/$(roomCode));
+      }
+
+      // Gallery sub-collection
+      match /gallery/{itemId} {
+        allow list, get: if isSignedIn() && exists(/databases/$(database)/documents/rooms/$(roomCode));
+        allow create: if isSignedIn() 
+          && isValidId(itemId) 
+          && isValidGalleryItem(incoming())
+          && exists(/databases/$(database)/documents/rooms/$(roomCode));
+        allow delete: if isSignedIn() && resource.data.uploadedBy == request.auth.uid;
       }
     }
   }

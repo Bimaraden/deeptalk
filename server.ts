@@ -3,8 +3,18 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import axios from "axios";
 import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
+
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
 async function startServer() {
   const app = express();
@@ -63,6 +73,31 @@ async function startServer() {
       const status = error.response?.status || 500;
       const message = error.response?.data?.error?.message || "Failed to fetch playlist";
       res.status(status).json({ error: message });
+    }
+  });
+
+  // API: Legacy AI Chat Response
+  app.post("/api/chat/legacy", async (req, res) => {
+    try {
+      const { messages, personaPrompt, partnerNickname } = req.body;
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: messages,
+        config: {
+          systemInstruction: `Kamu berperan sebagai ${partnerNickname}. 
+          Konteks tentang dirimu yang diberikan oleh pasanganmu: "${personaPrompt}". 
+          Balas pesan terakhir seolah-olah kamu adalah ${partnerNickname} yang sedang berbicara dengan orang tercinta. 
+          Gunakan bahasa Indonesia yang santai, intim, hangat, dan otentik. 
+          Jangan jelaskan bahwa kamu adalah AI. Langsung balas pesannya.`,
+          temperature: 0.9,
+        },
+      });
+      
+      res.json({ text: response.text });
+    } catch (error: any) {
+      console.error("Gemini Error:", error);
+      res.status(500).json({ error: "Failed to generate AI response" });
     }
   });
 
