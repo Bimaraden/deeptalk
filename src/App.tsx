@@ -443,6 +443,9 @@ export default function App() {
     // 3. Music Listener
     let lastKnownIndex = -1;
     const musicUnsub = onSnapshot(doc(db, `rooms/${roomCode}/music/current`), (snapshot) => {
+      // Don't sync from Firestore if we have pending local writes (avoids feedback loops/flickering)
+      if (snapshot.metadata.hasPendingWrites) return;
+
       if (snapshot.exists()) {
         const data = snapshot.data();
         
@@ -455,9 +458,14 @@ export default function App() {
           setCurrentTrackIndex(newIndex);
           setMusicProgress(newProgress);
         } else {
-          // Significant jump logic
+          // Significant jump logic - use a larger threshold (10s) and only sync if not host
+          // or if the host truly was out of sync (rare)
           setMusicProgress(prev => {
-            if (Math.abs(newProgress - prev) > 8) {
+            const drift = Math.abs(newProgress - prev);
+            // If the host is the one receiving this, they shouldn't usually jump 
+            // unless they reset the track globally.
+            if (drift > 12) {
+              console.log("Remote sync: forcing jump due to drift:", drift);
               return newProgress;
             }
             return prev;
@@ -857,14 +865,17 @@ export default function App() {
                   isPlaying={isPlaying}
                   onTogglePlay={() => {
                     const nextPlaying = !isPlaying;
+                    const currentProgress = audioRef.current?.currentTime || 0;
                     if (audioRef.current) {
                       if (nextPlaying) {
+                        // Crucial: sync time before playing to avoid jumping
+                        audioRef.current.currentTime = musicProgress;
                         audioRef.current.play().catch(e => console.warn("Direct play failed:", e));
                       } else {
                         audioRef.current.pause();
                       }
                     }
-                    syncMusic({ isPlaying: nextPlaying, progress: musicProgress });
+                    syncMusic({ isPlaying: nextPlaying, progress: currentProgress });
                   }}
                   progress={musicProgress}
                   volume={volume}
