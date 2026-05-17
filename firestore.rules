@@ -114,6 +114,11 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/rooms/$(roomCode));
       }
 
+      // WebRTC Signaling Active Indicator
+      match /webrtc/active {
+        allow read, write: if isSignedIn() && exists(/databases/$(database)/documents/rooms/$(roomCode));
+      }
+
       // Gallery sub-collection
       match /gallery/{itemId} {
         allow list, get: if isSignedIn() && exists(/databases/$(database)/documents/rooms/$(roomCode));
@@ -122,6 +127,15 @@ service cloud.firestore {
           && isValidGalleryItem(incoming())
           && exists(/databases/$(database)/documents/rooms/$(roomCode));
         allow delete: if isSignedIn() && resource.data.uploadedBy == request.auth.uid;
+      }
+
+    }
+
+    // WebRTC Signaling (placed outside rooms to match top-level collection path)
+    match /webrtc_sessions/{roomCode} {
+      allow read, write: if isSignedIn();
+      match /candidates/{candidateId} {
+        allow read, write: if isSignedIn();
       }
     }
   }

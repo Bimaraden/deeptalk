@@ -1,7 +1,7 @@
 {
   "name": "DeepTalk",
   "description": "DeepTalk: Ruang intim untuk berdua dengan radio musik bersama, galeri kenangan, dan AI Persona (Lestari) untuk tetap terhubung melampaui waktu.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["display-capture", "camera", "microphone"],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

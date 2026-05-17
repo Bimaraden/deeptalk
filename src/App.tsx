@@ -23,7 +23,9 @@ import {
   Trash2,
   Image as ImageIcon,
   Camera,
-  Heart
+  Heart,
+  Tv,
+  Maximize
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -187,6 +189,7 @@ export default function App() {
   const [nickname, setNickname] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isTyping, setIsTyping] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
   const [partnerPresence, setPartnerPresence] = useState<PresenceData | null>(null);
   const [timeLeft, setTimeLeft] = useState(SESSION_DURATION);
@@ -203,6 +206,7 @@ export default function App() {
   // Modals
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [isWatchTogetherOpen, setIsWatchTogetherOpen] = useState(false);
   const [legacySettings, setLegacySettings] = useState<{isEnabled: boolean, ownerId: string, personaPrompt: string}>({
     isEnabled: false,
     ownerId: '',
@@ -438,9 +442,19 @@ export default function App() {
 
     // 2. Presence Listener (Partner)
     const presenceUnsub = onSnapshot(collection(db, `rooms/${roomCode}/presence`), (snapshot) => {
+      const now = new Date().getTime();
       const partners = snapshot.docs
-        .map(doc => doc.data() as PresenceData)
-        .filter(p => p.userId !== uid);
+        .map(doc => {
+          const data = doc.data();
+          // Convert Firestore Timestamp to Date
+          const lastSeenDate = data.lastSeen?.toDate?.() || new Date();
+          return { ...data, lastSeenDate } as PresenceData & { lastSeenDate: Date };
+        })
+        .filter(p => {
+          const isOther = p.userId !== uid;
+          const isRecentlyActive = (now - p.lastSeenDate.getTime()) < 60000; // 1 minute
+          return isOther && isRecentlyActive;
+        });
       
       if (partners.length > 0) {
         setPartnerPresence(partners[0]);
@@ -487,11 +501,15 @@ export default function App() {
 
     // 4. Room Metadata (Timer sync and Deletion check)
     const roomSnap = onSnapshot(doc(db, `rooms/${roomCode}`), (snapshot) => {
+      // Remove hasPendingWrites check to ensure local optimistic updates are reflected immediately
       if (snapshot.exists()) {
         const data = snapshot.data();
         setRoomHostId(data.hostId);
         if (data.legacySettings) {
           setLegacySettings(data.legacySettings);
+        } else {
+          // Reset to default if not present
+          setLegacySettings({ isEnabled: false, ownerId: '', personaPrompt: '' });
         }
         const expiresAt = (data.expiresAt as Timestamp).toDate();
         const now = new Date();
@@ -602,39 +620,52 @@ export default function App() {
   };
 
   const triggerLegacyAI = async (lastUserText: string) => {
-    // Small delay to simulate thinking
-    setTimeout(async () => {
-      try {
-        // Construct simple context from last few messages
-        const chatHistory = messages.slice(-6).map(m => ({
-          role: m.sender === 'me' ? 'user' : 'model',
-          parts: [{ text: m.text }]
-        }));
+    setIsTyping(true);
+    try {
+      // Use partnerPresence if available
+      const partnerName = partnerPresence?.nickname || 'Pasanganmu';
 
-        // Add the current message if not yet in chatHistory
-        if (!chatHistory.some(h => h.parts[0].text === lastUserText)) {
-          chatHistory.push({ role: 'user', parts: [{ text: lastUserText }] });
-        }
+      const chatHistory = messages.slice(-10).map(m => ({
+        role: (m.senderId === 'legacy-ai' || (m.senderId !== user?.uid && m.senderId !== 'system')) ? 'model' : 'user',
+        parts: [{ text: m.text }]
+      }));
 
-        const response = await axios.post('/api/chat/legacy', {
-          messages: chatHistory,
-          personaPrompt: legacySettings.personaPrompt,
-          partnerNickname: 'Pasanganmu' // Fallback
-        });
-
-        if (response.data.text) {
-          await addDoc(collection(db, `rooms/${roomCode}/messages`), {
-            senderId: 'legacy-ai',
-            nickname: 'AI Persona',
-            text: response.data.text,
-            timestamp: serverTimestamp(),
-            type: 'chat'
-          });
-        }
-      } catch (err) {
-        console.error("Legacy AI Error:", err);
+      // Add current message if not empty
+      if (lastUserText && !chatHistory.some(h => h.parts[0].text === lastUserText)) {
+        chatHistory.push({ role: 'user', parts: [{ text: lastUserText }] });
       }
-    }, 2000);
+
+      const response = await axios.post('/api/chat/legacy', {
+        messages: chatHistory,
+        personaPrompt: legacySettings.personaPrompt,
+        partnerNickname: partnerName
+      });
+
+      if (response.data.text) {
+        await addDoc(collection(db, `rooms/${roomCode}/messages`), {
+          senderId: 'legacy-ai',
+          nickname: partnerName,
+          text: response.data.text,
+          timestamp: serverTimestamp(),
+          type: 'chat'
+        });
+      }
+    } catch (err: any) {
+      console.error("Legacy AI Error:", err);
+      // If error is from server and mentions leaked key or other specific issues
+      const serverError = err.response?.data;
+      if (serverError?.isLeaked) {
+        await addDoc(collection(db, `rooms/${roomCode}/messages`), {
+          senderId: 'system',
+          nickname: 'Sistem',
+          text: '⚠️ [Error] API Key AI terdeteksi bermasalah (Leaked). Hubungi developer atau perbarui kunci di AI Studio.',
+          timestamp: serverTimestamp(),
+          type: 'system'
+        });
+      }
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -652,9 +683,15 @@ export default function App() {
         type: 'chat'
       });
 
-      // Trigger Legacy AI if partner is offline and legacy mode is enabled by the "absent" person
-      // For this prototype, we'll trigger it if enabled and current user is NOT the persona owner
-      if (!partnerPresence && legacySettings.isEnabled && legacySettings.ownerId !== user.uid) {
+      // Trigger Legacy AI if partner is offline and legacy mode is enabled
+      console.log("Checking Legacy AI trigger:", {
+        partnerPresence: !!partnerPresence,
+        legacyEnabled: legacySettings.isEnabled,
+        userUid: user.uid,
+        ownerId: legacySettings.ownerId
+      });
+
+      if (!partnerPresence && legacySettings.isEnabled) {
         triggerLegacyAI(text);
       }
     } catch (err) {
@@ -783,6 +820,13 @@ export default function App() {
                   <ImageIcon className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
                 </button>
                 <button 
+                  onClick={() => setIsWatchTogetherOpen(true)}
+                  title="Nonton Bareng"
+                  className="w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-neo-cyan border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black hover:bg-neo-pink transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                >
+                  <Tv className="w-5 h-5 sm:w-6 sm:h-6 stroke-[3px]" />
+                </button>
+                <button 
                   onClick={() => setIsMusicPanelOpen(true)}
                   title="Musik"
                   className={`w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center border-2 sm:border-4 border-neo-black shadow-neo-sm text-neo-black transition-all cursor-pointer active:shadow-none active:translate-x-[2px] active:translate-y-[2px] relative ${
@@ -858,6 +902,17 @@ export default function App() {
                 {partnerPresence?.isTyping && (
                   <div className="flex flex-col items-start mt-2">
                     <span className="text-neo-black font-black text-[10px] sm:text-xs mb-1 px-1 uppercase italic">{partnerPresence.nickname} Mengetik...</span>
+                    <div className="bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm px-4 sm:px-6 py-2 sm:py-3 flex gap-1.5 sm:gap-2">
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots"></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots delay-150"></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots delay-300"></div>
+                    </div>
+                  </div>
+                )}
+
+                {isTyping && (
+                  <div className="flex flex-col items-start mt-2">
+                    <span className="text-neo-black font-black text-[10px] sm:text-xs mb-1 px-1 uppercase italic">Lestari AI Mengetik...</span>
                     <div className="bg-neo-white border-2 sm:border-4 border-neo-black shadow-neo-sm px-4 sm:px-6 py-2 sm:py-3 flex gap-1.5 sm:gap-2">
                       <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots"></div>
                       <div className="w-2 h-2 sm:w-3 sm:h-3 bg-neo-black rounded-full animate-bounce-dots delay-150"></div>
@@ -964,6 +1019,18 @@ export default function App() {
               {isGalleryOpen && (
                 <GalleryPanel 
                   onClose={() => setIsGalleryOpen(false)} 
+                  roomCode={roomCode}
+                  user={user}
+                  nickname={nickname}
+                />
+              )}
+            </AnimatePresence>
+
+            {/* Watch Together Panel */}
+            <AnimatePresence>
+              {isWatchTogetherOpen && (
+                <WatchTogetherPanel 
+                  onClose={() => setIsWatchTogetherOpen(false)}
                   roomCode={roomCode}
                   user={user}
                   nickname={nickname}
@@ -1231,7 +1298,7 @@ function MusicPanel({
             <div className="absolute -top-12 -left-8 w-24 h-24 bg-neo-yellow/20 rounded-full blur-3xl pointer-events-none"></div>
             <div className="flex flex-col relative z-10">
               <h2 className="font-headline font-black text-2xl sm:text-5xl text-neo-black uppercase italic transform -rotate-2 drop-shadow-neo-sm leading-none mb-1">
-                RADIO 104.15 FM
+                RADIO NEON 📻
               </h2>
               <div className="flex items-center gap-2">
                 <span className="animate-pulse w-2.5 h-2.5 sm:w-3 sm:h-3 bg-red-600 border-2 border-neo-black rounded-full shadow-neo-sm"></span>
@@ -1474,18 +1541,22 @@ function SecurityModal({ onClose, legacySettings, roomCode, user }: any) {
   const [isUpdating, setIsUpdating] = useState(false);
 
   const handleToggleLegacy = async () => {
+    if (!user || isUpdating) return;
+    console.log("Toggling legacy AI mode...");
     setIsUpdating(true);
     try {
-      await updateDoc(doc(db, `rooms/${roomCode}`), {
+      const roomRef = doc(db, `rooms/${roomCode}`);
+      await updateDoc(roomRef, {
         legacySettings: {
-          ...legacySettings,
           isEnabled: !legacySettings.isEnabled,
           ownerId: user.uid,
           personaPrompt: legacySettings.personaPrompt || 'Seorang pasangan yang penuh kasih sayang.'
         }
       });
+      console.log("Legacy AI mode toggled successfully");
     } catch (err) {
       console.error("Legacy toggle failed:", err);
+      alert("Gagal mengubah mode AI. Pastikan koneksi stabil.");
     } finally {
       setIsUpdating(false);
     }
@@ -1534,13 +1605,19 @@ function SecurityModal({ onClose, legacySettings, roomCode, user }: any) {
         {/* Tabs */}
         <div className="flex shrink-0">
           <button 
-            onClick={() => setActiveTab('safety')}
+            onClick={() => {
+              console.log("Switching to safety tab");
+              setActiveTab('safety');
+            }}
             className={`flex-1 py-4 font-black uppercase italic border-b-4 border-neo-black transition-all ${activeTab === 'safety' ? 'bg-neo-yellow' : 'bg-neo-white opacity-40 hover:opacity-100'}`}
           >
             KEAMANAN
           </button>
           <button 
-            onClick={() => setActiveTab('legacy')}
+            onClick={() => {
+              console.log("Switching to legacy tab");
+              setActiveTab('legacy');
+            }}
             className={`flex-1 py-4 font-black uppercase italic border-b-4 border-neo-black border-l-4 transition-all ${activeTab === 'legacy' ? 'bg-neo-cyan' : 'bg-neo-white opacity-40 hover:opacity-100'}`}
           >
             AI PERSONA
@@ -1585,23 +1662,27 @@ function SecurityModal({ onClose, legacySettings, roomCode, user }: any) {
                 "Jika suatu saat aku tak lagi di sini, biarkan diriku yang lain menemanimu mengobrol."
               </p>
 
-              <div className={`p-4 border-4 border-neo-black shadow-neo-sm transition-all ${legacySettings.isEnabled ? 'bg-neo-green' : 'bg-neutral-200 opacity-60'}`}>
-                <div className="flex items-center justify-between mb-4">
+              <button 
+                onClick={handleToggleLegacy}
+                disabled={isUpdating}
+                className={`w-full p-4 border-4 border-neo-black shadow-neo-sm transition-all cursor-pointer text-left flex flex-col gap-2 ${legacySettings.isEnabled ? 'bg-neo-green' : 'bg-neo-white hover:bg-neutral-100'}`}
+              >
+                <div className="flex items-center justify-between w-full">
                   <span className="font-black uppercase italic text-sm">Mode Kenangan</span>
-                  <button 
-                    onClick={handleToggleLegacy}
-                    disabled={isUpdating}
+                  <div 
                     className={`w-12 h-6 sm:w-14 sm:h-8 border-2 border-neo-black relative transition-all ${legacySettings.isEnabled ? 'bg-neo-black' : 'bg-neo-white'}`}
                   >
                     <div className={`absolute top-0.5 w-4 h-4 sm:w-6 sm:h-6 border-2 border-neo-black transition-all ${legacySettings.isEnabled ? 'right-0.5 bg-neo-green' : 'left-0.5 bg-neutral-400'}`}></div>
-                  </button>
+                  </div>
                 </div>
                 <p className="text-[10px] sm:text-xs font-bold leading-tight uppercase">
-                  {legacySettings.isEnabled 
+                  {isUpdating ? "MENGUPGRADE SISTEM..." : (
+                    legacySettings.isEnabled 
                     ? "AKTIF: AI akan membalas pesan jika kamu offline." 
-                    : "MATI: Pasanganmu tidak bisa mengobrol dengan AI-mu."}
+                    : "MATI: Klik untuk mengaktifkan AI Lestari."
+                  )}
                 </p>
-              </div>
+              </button>
 
               <div className="space-y-2">
                 <label className="block text-[10px] sm:text-xs font-black uppercase italic mb-1">Ajarkan AI tentang dirimu:</label>
@@ -1810,6 +1891,420 @@ function GalleryPanel({ onClose, roomCode, user, nickname }: any) {
             </div>
           )}
         </div>
+      </div>
+    </motion.div>
+  );
+}
+
+function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'linking' | 'watching' | 'sharing'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const configuration = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ],
+  };
+
+  useEffect(() => {
+    console.log("WatchTogether: Panel loaded with fixed paths (v2)");
+    // Cleanup on unmount
+    return () => {
+      stopSharing();
+    };
+  }, []);
+
+  useEffect(() => {
+    const stream = status === 'sharing' ? localStream : remoteStream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [localStream, remoteStream, status]);
+
+  // Listen for signals and room state
+  useEffect(() => {
+    if (!roomCode || !user) return;
+
+    // Listen for active signaling session in this room
+    const activeSessionRef = doc(db, `rooms/${roomCode}/webrtc/active`);
+    
+    const unsubActive = onSnapshot(activeSessionRef, async (snap) => {
+      if (!snap.exists()) {
+        if (status === 'watching' || status === 'linking') {
+           console.log("WatchTogether: Active session cleared.");
+           setStatus('idle');
+           setRemoteStream(null);
+           if (pcRef.current) {
+             pcRef.current.close();
+             pcRef.current = null;
+           }
+        }
+        return;
+      }
+
+      const { sessionId } = snap.data();
+      if (!sessionId) return;
+
+      // Now listen to the actual session
+      const sessionRef = doc(db, `webrtc_sessions/${sessionId}`);
+      const unsubSession = onSnapshot(sessionRef, async (sSnap) => {
+        if (!sSnap.exists()) return;
+        
+        const data = sSnap.data();
+        
+        // Handle Offer (as Receiver)
+        if (data.offer && data.offererId !== user.uid && status === 'idle') {
+          console.log("WatchTogether: Received offer for session:", sessionId);
+          setStatus('linking');
+          await handleOffer(data.offer, data.offererId, sessionId);
+        }
+
+        // Handle Answer (as Offerer)
+        if (data.answer && data.offererId === user.uid && status === 'sharing') {
+           if (pcRef.current && pcRef.current.signalingState === 'have-local-offer') {
+              console.log("WatchTogether: Received answer.");
+              await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+           }
+        }
+      });
+
+      // Listen for ICE candidates for this specific session
+      const candidatesCol = collection(db, `webrtc_sessions/${sessionId}/candidates`);
+      const unsubCandidates = onSnapshot(candidatesCol, (cSnap) => {
+        cSnap.docChanges().forEach(async (change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            if (data.from !== user.uid) {
+              const addWhenReady = async () => {
+                if (pcRef.current && pcRef.current.remoteDescription) {
+                  try {
+                    await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+                  } catch (e) {
+                    console.warn("WatchTogether: Error adding candidate:", e);
+                  }
+                } else {
+                  setTimeout(addWhenReady, 500);
+                }
+              };
+              addWhenReady();
+            }
+          }
+        });
+      });
+
+      return () => {
+        unsubSession();
+        unsubCandidates();
+      };
+    });
+
+    return () => {
+      unsubActive();
+    };
+  }, [roomCode, user, status]);
+
+  const initPC = (sessionId: string) => {
+    console.log("WatchTogether: Initializing RTCPeerConnection for session:", sessionId);
+    const pc = new RTCPeerConnection(configuration);
+    
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        addDoc(collection(db, `webrtc_sessions/${sessionId}/candidates`), {
+          candidate: event.candidate.toJSON(),
+          from: user.uid,
+          timestamp: serverTimestamp(),
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      console.log("WatchTogether: Remote track received!");
+      setRemoteStream(event.streams[0]);
+      setStatus('watching');
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("WatchTogether: ICE State:", pc.iceConnectionState);
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+        setStatus('idle');
+        setRemoteStream(null);
+      }
+    };
+
+    pcRef.current = pc;
+    return pc;
+  };
+
+  const handleOffer = async (offer: any, offererId: string, sessionId: string) => {
+    const pc = initPC(sessionId);
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await updateDoc(doc(db, `webrtc_sessions/${sessionId}`), {
+        answer: {
+          type: answer.type,
+          sdp: answer.sdp
+        }
+      });
+    } catch (err) {
+      console.error("WatchTogether: Error handling offer:", err);
+      setError("Gagal menyambungkan kaitan transmisi.");
+      setStatus('idle');
+    }
+  };
+
+  const startSharing = async () => {
+    setError(null);
+    try {
+      // Robust getDisplayMedia call
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true
+        });
+      } catch (err: any) {
+        console.warn("WatchTogether: Failed to get display media with audio, retrying without audio...", err);
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true
+        });
+      }
+      
+      setLocalStream(stream);
+      setIsSharing(true);
+      setStatus('sharing');
+
+      // Create a unique session ID
+      const sessionRef = doc(collection(db, "webrtc_sessions"));
+      const sessionId = sessionRef.id;
+
+      const pc = initPC(sessionId);
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Write session data
+      await setDoc(sessionRef, {
+        offer: {
+          type: offer.type,
+          sdp: offer.sdp
+        },
+        offererId: user.uid,
+        offererNickname: nickname,
+        timestamp: serverTimestamp()
+      });
+
+      // Broadcast active session ID to the room
+      await setDoc(doc(db, `rooms/${roomCode}/webrtc/active`), {
+        sessionId,
+        offererId: user.uid,
+        timestamp: serverTimestamp()
+      });
+
+      stream.getVideoTracks()[0].onended = () => {
+        stopSharing(sessionId);
+      };
+
+    } catch (err: any) {
+      console.error("WatchTogether: Screen share error:", err);
+      if (err.name === 'NotAllowedError') {
+        setError("Izin berbagi layar ditolak. Pastikan Anda mengklik 'Share' dan mengizinkan browser.");
+      } else {
+        setError(err.message || "Gagal memulai berbagi layar.");
+      }
+      setStatus('idle');
+    }
+  };
+
+  const stopSharing = async (sessionIdParam?: string) => {
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      setLocalStream(null);
+    }
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    
+    setIsSharing(false);
+    setStatus('idle');
+    setRemoteStream(null);
+
+    // Clean up signaling
+    try {
+      // Reset active session in room
+      await deleteDoc(doc(db, `rooms/${roomCode}/webrtc/active`));
+      
+      // If we have a session ID, we could clean it up, but the active pointer removal 
+      // is enough for the receiver to stop.
+    } catch (e) {}
+  };
+
+  const toggleFullscreen = () => {
+    if (videoRef.current) {
+      if (videoRef.current.requestFullscreen) {
+        videoRef.current.requestFullscreen();
+      } else if ((videoRef.current as any).webkitRequestFullscreen) {
+        (videoRef.current as any).webkitRequestFullscreen();
+      } else if ((videoRef.current as any).msRequestFullscreen) {
+        (videoRef.current as any).msRequestFullscreen();
+      }
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      className="fixed inset-0 sm:inset-y-0 sm:right-0 sm:left-auto sm:w-[500px] bg-neo-yellow z-40 border-l-8 border-neo-black flex flex-col shadow-2xl p-4 sm:p-8"
+    >
+      <div className="flex items-center justify-between mb-8 border-b-8 border-neo-black pb-6">
+        <div className="flex flex-col">
+          <h2 className="font-headline font-black text-4xl text-neo-black uppercase italic transform -rotate-2 drop-shadow-neo-sm leading-none mb-1">
+            NONBAR 📺
+          </h2>
+          <span className="text-[10px] bg-neo-black text-neo-white font-black uppercase italic px-2 py-0.5 border-2 border-neo-black inline-block w-fit">
+            WATCH TOGETHER
+          </span>
+        </div>
+        <button 
+          onClick={onClose}
+          className="w-12 h-12 bg-neo-pink border-4 border-neo-black shadow-neo-sm flex items-center justify-center text-neo-black hover:bg-neo-cyan transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px]"
+        >
+          <X className="w-8 h-8 stroke-[4px]" />
+        </button>
+      </div>
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {status === 'idle' && (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-4 space-y-6">
+             <div className="w-24 h-24 sm:w-32 sm:h-32 bg-neo-white border-4 border-neo-black shadow-neo flex items-center justify-center rounded-full mb-4">
+                <Tv className="w-12 h-12 sm:w-16 sm:h-16 stroke-[2px]" />
+             </div>
+             <div>
+               <h3 className="font-black text-2xl uppercase italic mb-2">Mau Nonton Apa Hari Ini?</h3>
+               <p className="font-bold text-sm opacity-60 leading-tight">
+                 Bagikan layarmu untuk nonton film, youtube, atau sekadar scrolling bareng si dia.
+               </p>
+             </div>
+             
+             {error && (
+               <div className="bg-red-400 border-4 border-neo-black p-4 shadow-neo-sm w-full text-left">
+                 <p className="font-black uppercase italic text-xs mb-1">⚠️ Error Detected:</p>
+                 <p className="font-bold text-sm leading-tight">{error}</p>
+                 <p className="text-[9px] mt-2 font-black uppercase opacity-60">Saran: Gunakan browser Chrome/Edge dan pastikan izin diberikan.</p>
+               </div>
+             )}
+
+             <button 
+               onClick={startSharing}
+               className="w-full bg-neo-green text-neo-black border-4 border-neo-black font-black py-6 uppercase text-xl sm:text-2xl shadow-neo hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-neo-lg transition-all cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none italic"
+             >
+               Mulai Berbagi Layar
+             </button>
+
+             <div className="bg-neo-black p-4 border-4 border-neo-black text-neo-white w-full">
+                <p className="text-[10px] font-black uppercase italic opacity-75 mb-2">💡 Tips Nonton Bareng:</p>
+                <ul className="text-left text-[10px] font-bold space-y-1 uppercase list-disc ml-4">
+                  <li>Buka Youtube/Netflix di tab sebelah</li>
+                  <li>Klik tombol hijau di atas</li>
+                  <li>Pilih "Tab" atau "Window" yang ingin dishare</li>
+                  <li>Centang "Share Tab Audio" jika ingin suara ikut</li>
+                </ul>
+             </div>
+          </div>
+        )}
+
+        {(status === 'sharing' || status === 'watching' || status === 'linking') && (
+          <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+            <div className="aspect-video bg-neo-black border-4 border-neo-black shadow-neo relative overflow-hidden flex items-center justify-center">
+              {status === 'linking' && (
+                <div className="flex flex-col items-center gap-4 text-neo-white">
+                  <div className="w-10 h-10 border-4 border-neo-white border-t-transparent rounded-full animate-spin"></div>
+                  <span className="font-black uppercase italic animate-pulse">Menghubungkan Transmisi...</span>
+                </div>
+              )}
+              
+              <video 
+                ref={videoRef}
+                autoPlay 
+                playsInline 
+                muted={status === 'sharing'}
+                className={`w-full h-full object-contain ${status === 'linking' ? 'hidden' : 'block'} bg-black`}
+                onLoadedMetadata={(e) => {
+                  const el = e.target as HTMLVideoElement;
+                  el.play().catch(err => console.error("Video play failed:", err));
+                }}
+              />
+
+              <div className="absolute top-4 left-4 flex flex-col gap-2">
+                <div className="bg-red-600 text-neo-white px-3 py-1 border-2 border-neo-black font-black italic text-xs uppercase animate-pulse flex items-center gap-2 shadow-neo-sm">
+                  <span className="w-2 h-2 bg-neo-white rounded-full"></span>
+                  LIVE
+                </div>
+                {status === 'linking' && (
+                  <div className="bg-neo-yellow text-neo-black px-2 py-0.5 border-2 border-neo-black font-black text-[8px] uppercase">
+                    Syncing...
+                  </div>
+                )}
+              </div>
+
+              {status !== 'linking' && (
+                <button 
+                  onClick={toggleFullscreen}
+                  className="absolute bottom-4 left-4 bg-neo-cyan border-2 border-neo-black p-2 shadow-neo-sm hover:translate-x-[-1px] hover:translate-y-[-1px] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer z-10"
+                  title="Fullscreen"
+                >
+                  <Maximize className="w-5 h-5 stroke-[3px]" />
+                </button>
+              )}
+
+              {status === 'sharing' && (
+                <div className="absolute bottom-4 right-4 bg-neo-black text-neo-white px-3 py-1 border-2 border-neo-white font-black text-[10px] uppercase">
+                  Membagikan Layarmu
+                </div>
+              )}
+            </div>
+
+            <div className="bg-neo-white border-4 border-neo-black p-4 sm:p-6 shadow-neo shrink-0">
+              <h4 className="font-black uppercase italic text-lg sm:text-xl mb-1">
+                {status === 'sharing' ? "Layar Sedang Ditampilkan" : "Menonton Layar Pasangan"}
+              </h4>
+              <p className="font-bold text-xs opacity-60 mb-6 italic">
+                {status === 'sharing' 
+                  ? "Pasanganmu bisa melihat apapun yang kamu bagikan sekarang." 
+                  : "Duduk manis dan nikmati apa yang ditampilkan pasanganmu."}
+              </p>
+
+              <button 
+                onClick={stopSharing}
+                className="w-full bg-red-400 text-neo-black border-4 border-neo-black font-black py-4 uppercase italic shadow-neo-sm hover:bg-red-500 transition-all cursor-pointer active:translate-y-1 active:shadow-none"
+              >
+                HENTIKAN NONBAR
+              </button>
+            </div>
+
+            {status === 'watching' && (
+              <div className="flex-1 bg-neo-cyan/10 border-4 border-neo-black border-dashed p-6 flex flex-col items-center justify-center text-center overflow-hidden">
+                 <Radio className="w-10 h-10 mb-4 animate-bounce shrink-0" />
+                 <p className="font-black uppercase italic text-sm">Transmisi Stabil</p>
+                 <p className="text-[10px] font-bold opacity-60 uppercase">Selamat menonton bareng kesayangan!</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </motion.div>
   );
