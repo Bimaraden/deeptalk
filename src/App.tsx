@@ -1231,7 +1231,7 @@ function MusicPanel({
             <div className="absolute -top-12 -left-8 w-24 h-24 bg-neo-yellow/20 rounded-full blur-3xl pointer-events-none"></div>
             <div className="flex flex-col relative z-10">
               <h2 className="font-headline font-black text-2xl sm:text-5xl text-neo-black uppercase italic transform -rotate-2 drop-shadow-neo-sm leading-none mb-1">
-                RADIO NEON 📻
+                RADIO 104.15 FM
               </h2>
               <div className="flex items-center gap-2">
                 <span className="animate-pulse w-2.5 h-2.5 sm:w-3 sm:h-3 bg-red-600 border-2 border-neo-black rounded-full shadow-neo-sm"></span>
