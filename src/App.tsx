@@ -1916,14 +1916,30 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' },
     ],
   };
 
+  const streamCleanupRef = useRef<{ local: MediaStream | null, remote: MediaStream | null }>({ local: null, remote: null });
+
   useEffect(() => {
-    console.log("WatchTogether: Panel loaded with fixed paths (v2)");
-    // Cleanup on unmount
+    streamCleanupRef.current = { local: localStream, remote: remoteStream };
+  }, [localStream, remoteStream]);
+
+  useEffect(() => {
+    console.log("WatchTogether: Panel loaded.");
     return () => {
-      stopSharing();
+      // Direct cleanup using refs to ensure we have the latest streams even in unmount closure
+      if (streamCleanupRef.current.local) {
+        streamCleanupRef.current.local.getTracks().forEach(t => t.stop());
+      }
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      cleanupSignaling();
     };
   }, []);
 
@@ -1934,82 +1950,81 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
     }
   }, [localStream, remoteStream, status]);
 
-  // Listen for signals and room state
+  const currentSessionIdRef = useRef<string | null>(null);
+
+  // Separate effect for signaling sync
   useEffect(() => {
     if (!roomCode || !user) return;
 
-    // Listen for active signaling session in this room
     const activeSessionRef = doc(db, `rooms/${roomCode}/webrtc/active`);
     
     const unsubActive = onSnapshot(activeSessionRef, async (snap) => {
-      // Clear previous sub-listeners first
-      cleanupSignaling();
-
       if (!snap.exists()) {
-        console.log("WatchTogether: No active session.");
+        console.log("WatchTogether: No active session document found.");
+        currentSessionIdRef.current = null;
         if (status === 'watching' || status === 'linking') {
-           setStatus('idle');
-           setRemoteStream(null);
-           if (pcRef.current) {
-             pcRef.current.close();
-             pcRef.current = null;
-           }
+           stopWatching();
         }
         return;
       }
 
       const { sessionId, offererId } = snap.data();
       if (!sessionId) return;
+
+      // If session hasn't changed, don't reset listeners
+      if (currentSessionIdRef.current === sessionId) return;
       
-      // Don't try to link if we are the one sharing
-      if (offererId === user.uid) {
-        console.log("WatchTogether: We are the offerer, skipping receiver signaling.");
-        return;
-      }
+      console.log(`WatchTogether: Tracking session ${sessionId}.`);
+      currentSessionIdRef.current = sessionId;
+      
+      // Clear previous sub-listeners for old session
+      cleanupSignaling();
 
-      console.log("WatchTogether: New active session detected:", sessionId);
-
-      // Now listen to the actual session
+      // Determine roles. localStream truth check allows multi-tab testing on same UID.
+      const amITheOfferer = (status === 'sharing' && !!localStream);
+      
+      // 1. Session Document Listener (Offers & Answers)
       const sessionRef = doc(db, `webrtc_sessions/${sessionId}`);
       const unsubSession = onSnapshot(sessionRef, async (sSnap) => {
-        if (!sSnap.exists()) {
-          console.log("WatchTogether: Session data deleted.");
-          return;
-        }
-        
+        if (!sSnap.exists()) return;
         const data = sSnap.data();
         
-        // Handle Offer (as Receiver)
-        if (data.offer && status === 'idle') {
-          console.log("WatchTogether: Received offer from:", data.offererNickname);
-          setStatus('linking');
-          await handleOffer(data.offer, data.offererId, sessionId);
+        // RECEIVER Role: Handle Offer
+        if (!amITheOfferer && data.offer && (status === 'idle' || status === 'linking')) {
+          if (status === 'idle') {
+            console.log("WatchTogether: New offer detected. Linking...");
+            setStatus('linking');
+            await handleOffer(data.offer, data.offererId, sessionId);
+          }
+        }
+
+        // OFFERER Role: Handle Answer
+        if (amITheOfferer && data.answer && pcRef.current?.signalingState === 'have-local-offer') {
+          console.log("WatchTogether: Receiver answer detected. Connecting...");
+          await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
         }
       });
 
-      // Listen for ICE candidates for this specific session
+      // 2. ICE Candidates Listener (Both Roles)
       const candidatesCol = collection(db, `webrtc_sessions/${sessionId}/candidates`);
       const unsubCandidates = onSnapshot(candidatesCol, (cSnap) => {
         cSnap.docChanges().forEach(async (change) => {
           if (change.type === 'added') {
             const data = change.doc.data();
-            // We only care about candidates from the OTHER person
-            if (data.from !== user.uid) {
-              const addWhenReady = async () => {
+            // Don't add your own candidates.
+            if (data.from !== user.uid) { 
+              const addC = async () => {
                 if (pcRef.current && pcRef.current.remoteDescription) {
                   try {
                     await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
                   } catch (e) {
-                    console.warn("WatchTogether: Error adding candidate:", e);
+                    console.warn("WatchTogether: Candidate addition failed.", e);
                   }
-                } else {
-                  // Keep checking if we are still in a relevant state
-                  if (pcRef.current && (status === 'linking' || status === 'watching')) {
-                    setTimeout(addWhenReady, 500);
-                  }
+                } else if (pcRef.current && status !== 'idle') {
+                  setTimeout(addC, 500);
                 }
               };
-              addWhenReady();
+              addC();
             }
           }
         });
@@ -2018,42 +2033,12 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       signalingUnsubs.current.push(unsubSession, unsubCandidates);
     });
 
-    // Handle Offerer specific feedback (Answer listener)
-    // This part runs ONLY for the sharing user to get the answer
-    let unsubAnswer: (() => void) | null = null;
-    
     return () => {
       unsubActive();
       cleanupSignaling();
+      currentSessionIdRef.current = null;
     };
-  }, [roomCode, user, status]);
-
-  // Separate effect for the offerer to listen for answers
-  useEffect(() => {
-    if (status !== 'sharing' || !pcRef.current) return;
-    
-    // We need to know which session document to look at for the answer
-    // We'll store the current sessionId in a temporary state or derived from something
-    // Actually, let's just listen to the active session IF we are the offerer
-    const activeSessionRef = doc(db, `rooms/${roomCode}/webrtc/active`);
-    const unsubAnswer = onSnapshot(activeSessionRef, async (snap) => {
-       if (!snap.exists()) return;
-       const { sessionId, offererId } = snap.data();
-       if (offererId !== user.uid) return;
-
-       const sessionDoc = doc(db, `webrtc_sessions/${sessionId}`);
-       return onSnapshot(sessionDoc, async (sSnap) => {
-         if (!sSnap.exists()) return;
-         const data = sSnap.data();
-         if (data.answer && pcRef.current && pcRef.current.signalingState === 'have-local-offer') {
-           console.log("WatchTogether: Received answer from receiver.");
-           await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-         }
-       });
-    });
-
-    return () => unsubAnswer();
-  }, [status, roomCode, user]);
+  }, [roomCode, user, status, localStream]);
 
   const initPC = (sessionId: string) => {
     console.log("WatchTogether: Initializing RTCPeerConnection for session:", sessionId);
@@ -2070,13 +2055,17 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
     };
 
     pc.ontrack = (event) => {
-      console.log("WatchTogether: Remote track received!", event.streams[0].id);
-      // Ensure we don't blink/glitch by only setting if it's a new stream
+      console.log("WatchTogether: Track received!", event.track.kind);
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      
       setRemoteStream(prev => {
-        if (prev?.id === event.streams[0].id) return prev;
-        return event.streams[0];
+        if (prev?.id === stream.id) return prev;
+        return stream;
       });
-      setStatus('watching');
+      
+      if (status !== 'sharing') {
+        setStatus('watching');
+      }
     };
 
     pc.onconnectionstatechange = () => {
@@ -2089,9 +2078,11 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
 
     pc.oniceconnectionstatechange = () => {
       console.log("WatchTogether: ICE State:", pc.iceConnectionState);
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-        setStatus('idle');
-        setRemoteStream(null);
+      // Don't kill the session on 'disconnected' as it might recover.
+      // Only kill on 'failed' or 'closed'.
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+        if (status === 'watching') stopWatching();
+        else if (status === 'sharing') stopSharing();
       }
     };
 
@@ -2313,7 +2304,12 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
                 className={`w-full h-full object-contain ${status === 'linking' ? 'hidden' : 'block'} bg-black`}
                 onLoadedMetadata={(e) => {
                   const el = e.target as HTMLVideoElement;
-                  el.play().catch(err => console.error("Video play failed:", err));
+                  el.play().catch(err => {
+                    console.error("WatchTogether: Video play failed:", err);
+                    if (err.name === 'NotAllowedError') {
+                      setError("Klik di mana saja pada layar untuk memainkan audio transmisi.");
+                    }
+                  });
                 }}
               />
 
