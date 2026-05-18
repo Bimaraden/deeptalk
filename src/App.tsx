@@ -2113,19 +2113,35 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
   const startSharing = async () => {
     setError(null);
     try {
-      // Robust getDisplayMedia call
+      // Robust getDisplayMedia call with higher frame rate for video
       let stream: MediaStream;
+      const displayOptions: DisplayMediaStreamOptions = {
+        video: {
+          displaySurface: 'browser',
+          frameRate: { ideal: 30, max: 60 },
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      };
+
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true
-        });
+        stream = await navigator.mediaDevices.getDisplayMedia(displayOptions);
       } catch (err: any) {
-        console.warn("WatchTogether: Failed to get display media with audio, retrying without audio...", err);
+        console.warn("WatchTogether: Failed to get display media with audio or high settings, retrying simple...", err);
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: true
         });
       }
+      
+      // Optimize tracks for motion (video playback)
+      stream.getVideoTracks().forEach(track => {
+        if ('contentHint' in track) {
+          (track as any).contentHint = 'motion';
+        }
+      });
       
       setLocalStream(stream);
       setIsSharing(true);
@@ -2136,7 +2152,22 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       const sessionId = sessionRef.id;
 
       const pc = initPC(sessionId);
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      stream.getTracks().forEach(track => {
+        const sender = pc.addTrack(track, stream);
+        
+        // Use maintain-framerate to avoid choppy video during transit
+        const params = sender.getParameters();
+        if (!params.encodings) {
+          params.encodings = [{}];
+        }
+        (params as any).degradationPreference = 'maintain-framerate';
+        sender.setParameters(params).catch(e => console.warn("WatchTogether: Failed to set sender params", e));
+
+        // Hint for motion smoothness
+        if (sender.track && 'contentHint' in sender.track) {
+          (sender.track as any).contentHint = 'motion';
+        }
+      });
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
