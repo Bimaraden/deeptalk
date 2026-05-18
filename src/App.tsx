@@ -2118,6 +2118,8 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       const displayOptions: DisplayMediaStreamOptions = {
         video: {
           displaySurface: 'browser',
+          width: { ideal: 1920, max: 1920 },
+          height: { ideal: 1080, max: 1080 },
           frameRate: { ideal: 30, max: 60 },
         },
         audio: {
@@ -2130,10 +2132,15 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(displayOptions);
       } catch (err: any) {
-        console.warn("WatchTogether: Failed to get display media with audio or high settings, retrying simple...", err);
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true
-        });
+        console.warn("WatchTogether: HD resolution failed, trying fallback...", err);
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+            audio: true
+          });
+        } catch (e2) {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        }
       }
       
       // Optimize tracks for motion (video playback)
@@ -2155,12 +2162,16 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       stream.getTracks().forEach(track => {
         const sender = pc.addTrack(track, stream);
         
-        // Use maintain-framerate to avoid choppy video during transit
+        // Quality optimization: Set higher bitrate and balanced degradation
         const params = sender.getParameters();
         if (!params.encodings) {
           params.encodings = [{}];
         }
-        (params as any).degradationPreference = 'maintain-framerate';
+        
+        // Use up to 5mbps for better HD quality
+        params.encodings[0].maxBitrate = 5000000; 
+        (params as any).degradationPreference = 'balanced';
+        
         sender.setParameters(params).catch(e => console.warn("WatchTogether: Failed to set sender params", e));
 
         // Hint for motion smoothness
