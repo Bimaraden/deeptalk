@@ -1905,6 +1905,12 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
   
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const signalingUnsubs = useRef<(() => void)[]>([]);
+
+  const cleanupSignaling = () => {
+    signalingUnsubs.current.forEach(u => u());
+    signalingUnsubs.current = [];
+  };
 
   const configuration = {
     iceServers: [
@@ -1936,9 +1942,12 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
     const activeSessionRef = doc(db, `rooms/${roomCode}/webrtc/active`);
     
     const unsubActive = onSnapshot(activeSessionRef, async (snap) => {
+      // Clear previous sub-listeners first
+      cleanupSignaling();
+
       if (!snap.exists()) {
+        console.log("WatchTogether: No active session.");
         if (status === 'watching' || status === 'linking') {
-           console.log("WatchTogether: Active session cleared.");
            setStatus('idle');
            setRemoteStream(null);
            if (pcRef.current) {
@@ -1949,29 +1958,32 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
         return;
       }
 
-      const { sessionId } = snap.data();
+      const { sessionId, offererId } = snap.data();
       if (!sessionId) return;
+      
+      // Don't try to link if we are the one sharing
+      if (offererId === user.uid) {
+        console.log("WatchTogether: We are the offerer, skipping receiver signaling.");
+        return;
+      }
+
+      console.log("WatchTogether: New active session detected:", sessionId);
 
       // Now listen to the actual session
       const sessionRef = doc(db, `webrtc_sessions/${sessionId}`);
       const unsubSession = onSnapshot(sessionRef, async (sSnap) => {
-        if (!sSnap.exists()) return;
+        if (!sSnap.exists()) {
+          console.log("WatchTogether: Session data deleted.");
+          return;
+        }
         
         const data = sSnap.data();
         
         // Handle Offer (as Receiver)
-        if (data.offer && data.offererId !== user.uid && status === 'idle') {
-          console.log("WatchTogether: Received offer for session:", sessionId);
+        if (data.offer && status === 'idle') {
+          console.log("WatchTogether: Received offer from:", data.offererNickname);
           setStatus('linking');
           await handleOffer(data.offer, data.offererId, sessionId);
-        }
-
-        // Handle Answer (as Offerer)
-        if (data.answer && data.offererId === user.uid && status === 'sharing') {
-           if (pcRef.current && pcRef.current.signalingState === 'have-local-offer') {
-              console.log("WatchTogether: Received answer.");
-              await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-           }
         }
       });
 
@@ -1981,6 +1993,7 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
         cSnap.docChanges().forEach(async (change) => {
           if (change.type === 'added') {
             const data = change.doc.data();
+            // We only care about candidates from the OTHER person
             if (data.from !== user.uid) {
               const addWhenReady = async () => {
                 if (pcRef.current && pcRef.current.remoteDescription) {
@@ -1990,7 +2003,10 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
                     console.warn("WatchTogether: Error adding candidate:", e);
                   }
                 } else {
-                  setTimeout(addWhenReady, 500);
+                  // Keep checking if we are still in a relevant state
+                  if (pcRef.current && (status === 'linking' || status === 'watching')) {
+                    setTimeout(addWhenReady, 500);
+                  }
                 }
               };
               addWhenReady();
@@ -1999,16 +2015,45 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
         });
       });
 
-      return () => {
-        unsubSession();
-        unsubCandidates();
-      };
+      signalingUnsubs.current.push(unsubSession, unsubCandidates);
     });
 
+    // Handle Offerer specific feedback (Answer listener)
+    // This part runs ONLY for the sharing user to get the answer
+    let unsubAnswer: (() => void) | null = null;
+    
     return () => {
       unsubActive();
+      cleanupSignaling();
     };
   }, [roomCode, user, status]);
+
+  // Separate effect for the offerer to listen for answers
+  useEffect(() => {
+    if (status !== 'sharing' || !pcRef.current) return;
+    
+    // We need to know which session document to look at for the answer
+    // We'll store the current sessionId in a temporary state or derived from something
+    // Actually, let's just listen to the active session IF we are the offerer
+    const activeSessionRef = doc(db, `rooms/${roomCode}/webrtc/active`);
+    const unsubAnswer = onSnapshot(activeSessionRef, async (snap) => {
+       if (!snap.exists()) return;
+       const { sessionId, offererId } = snap.data();
+       if (offererId !== user.uid) return;
+
+       const sessionDoc = doc(db, `webrtc_sessions/${sessionId}`);
+       return onSnapshot(sessionDoc, async (sSnap) => {
+         if (!sSnap.exists()) return;
+         const data = sSnap.data();
+         if (data.answer && pcRef.current && pcRef.current.signalingState === 'have-local-offer') {
+           console.log("WatchTogether: Received answer from receiver.");
+           await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+         }
+       });
+    });
+
+    return () => unsubAnswer();
+  }, [status, roomCode, user]);
 
   const initPC = (sessionId: string) => {
     console.log("WatchTogether: Initializing RTCPeerConnection for session:", sessionId);
@@ -2025,9 +2070,21 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
     };
 
     pc.ontrack = (event) => {
-      console.log("WatchTogether: Remote track received!");
-      setRemoteStream(event.streams[0]);
+      console.log("WatchTogether: Remote track received!", event.streams[0].id);
+      // Ensure we don't blink/glitch by only setting if it's a new stream
+      setRemoteStream(prev => {
+        if (prev?.id === event.streams[0].id) return prev;
+        return event.streams[0];
+      });
       setStatus('watching');
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log("WatchTogether: Connection state:", pc.connectionState);
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        if (status === 'watching') stopWatching();
+        else if (status === 'sharing') stopSharing();
+      }
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -2148,6 +2205,17 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
       // If we have a session ID, we could clean it up, but the active pointer removal 
       // is enough for the receiver to stop.
     } catch (e) {}
+  };
+
+  const stopWatching = () => {
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    setRemoteStream(null);
+    setStatus('idle');
+    cleanupSignaling();
+    console.log("WatchTogether: Stopped watching.");
   };
 
   const toggleFullscreen = () => {
@@ -2289,10 +2357,10 @@ function WatchTogetherPanel({ onClose, roomCode, user, nickname }: any) {
               </p>
 
               <button 
-                onClick={stopSharing}
-                className="w-full bg-red-400 text-neo-black border-4 border-neo-black font-black py-4 uppercase italic shadow-neo-sm hover:bg-red-500 transition-all cursor-pointer active:translate-y-1 active:shadow-none"
+                onClick={status === 'sharing' ? () => stopSharing() : stopWatching}
+                className={`w-full ${status === 'sharing' ? 'bg-red-500' : 'bg-neo-pink'} text-neo-black border-4 border-neo-black font-black py-4 uppercase italic shadow-neo-sm hover:opacity-90 transition-all cursor-pointer active:translate-y-1 active:shadow-none`}
               >
-                HENTIKAN NONBAR
+                {status === 'sharing' ? "MATIKAN BERBAGI LAYAR" : "BERHENTI MENONTON"}
               </button>
             </div>
 
